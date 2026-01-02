@@ -20,6 +20,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 	"gopkg.in/gomail.v2"
+	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 )
 
@@ -952,14 +953,18 @@ func CreateTicketForStaff(c *fiber.Ctx) error {
 			tx.Rollback()
 			return utils.ErrorResponse(c, 400, fmt.Sprintf("Ghế %d không được giữ bởi bạn", seatId), err)
 		}
-
+		ticketCode := "TKT-" + uuid.New().String()[:10]
 		// Tạo vé
 		ticket := model.Ticket{
-			ShowtimeId: showtime.ID,
-			SeatId:     seatId,
-			Price:      stSeat.Showtime.Price, // Hoặc tính từ priceModifier
-			Status:     "PAID",
-			CreatedBy:  accountInfo.AccountId,
+			OrderId:        order.ID, // ← QUAN TRỌNG: liên kết với Order
+			ShowtimeId:     showtime.ID,
+			ShowtimeSeatId: stSeat.ID, // ← liên kết với ghế trong suất
+			SeatId:         stSeat.SeatId,
+			TicketCode:     ticketCode,
+			Price:          float64(showtime.Price) * stSeat.SeatType.PriceModifier,
+			Status:         "PAID",
+			IssuedAt:       now,
+			CreatedBy:      accountInfo.AccountId,
 		}
 		if err := tx.Create(&ticket).Error; err != nil {
 			tx.Rollback()
@@ -983,5 +988,147 @@ func CreateTicketForStaff(c *fiber.Ctx) error {
 	return utils.SuccessResponse(c, 200, fiber.Map{
 		"tickets": tickets,
 		"message": "Tạo vé thành công",
+	})
+}
+
+// API check-in
+func CheckinByBookingCode(c *fiber.Ctx) error {
+	code := c.Query("code") // hoặc từ body
+	db := database.DB
+	var tickets []model.Ticket
+	if err := db.Where("booking_code = ? AND status = 'PAID'", code).Find(&tickets).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Đơn hàng không tồn tại", err)
+	}
+
+	if len(tickets) == 0 {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Không tìm thấy vé", nil)
+	}
+
+	// Kiểm tra đã check-in chưa
+	var checkedInCount int64
+	db.Model(&model.Ticket{}).Where("booking_code = ? AND status = 'CHECKED_IN'", code).Count(&checkedInCount)
+	if checkedInCount > 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Đơn này đã được check-in một phần hoặc toàn bộ", nil)
+	}
+
+	// Check-in tất cả
+	if err := db.Model(&model.Ticket{}).Where("booking_code = ?", code).
+		Updates(map[string]interface{}{
+			"status":        "CHECKED_IN",
+			"checked_in_at": time.Now(),
+		}).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Check-in thất bại", nil)
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
+		"message":       fmt.Sprintf("Check-in thành công %d vé", len(tickets)),
+		"customer_name": tickets[0].Order.CustomerName,
+		"movie":         tickets[0].Showtime.Movie.Title,
+		"ticketCode":    tickets[0].TicketCode,
+		"showtime":      tickets[0].Showtime.StartTime,
+	})
+}
+func CheckinByOrderCode(c *fiber.Ctx) error {
+	type CheckinInput struct {
+		Code string `json:"code" validate:"required"`
+	}
+
+	var input CheckinInput
+	if err := c.BodyParser(&input); err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Dữ liệu không hợp lệ", err)
+	}
+
+	db := database.DB
+
+	// 1️⃣ Lấy order + tickets + seat + showtime + movie
+	var order model.Order
+	err := db.
+		Preload("Tickets.ShowtimeSeat.Seat").
+		Preload("Tickets.Showtime.Movie").
+		Where("public_code = ?", input.Code).
+		First(&order).Error
+
+	if err != nil {
+		return utils.ErrorResponse(
+			c,
+			fiber.StatusNotFound,
+			"Đơn hàng không tồn tại hoặc mã không hợp lệ",
+			err,
+		)
+	}
+
+	if len(order.Tickets) == 0 {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Đơn hàng không có vé", nil)
+	}
+
+	showtime := order.Tickets[0].Showtime
+
+	// 2️⃣ KIỂM TRA SUẤT CHIẾU ĐÃ KẾT THÚC CHƯA
+	// Thời gian kết thúc ước tính = start_time + duration (phút) + 15 phút dọn phòng
+	endTime := showtime.StartTime.Add(time.Duration(showtime.Movie.Duration+15) * time.Minute)
+
+	if time.Now().After(endTime) {
+		return utils.ErrorResponse(
+			c,
+			fiber.StatusForbidden,
+			fmt.Sprintf(
+				"Suất chiếu đã kết thúc từ %s. Không thể check-in sau khi phim hết.",
+				endTime.Format("15:04"),
+			),
+			nil,
+		)
+	}
+
+	// 3️⃣ Kiểm tra vé đã check-in chưa
+	for _, ticket := range order.Tickets {
+		if ticket.Status == "CHECKED_IN" {
+			return utils.ErrorResponse(
+				c,
+				fiber.StatusBadRequest,
+				"Đơn hàng đã được check-in trước đó",
+				nil,
+			)
+		}
+	}
+
+	// 4️⃣ Check-in tất cả vé (transaction)
+	now := time.Now()
+
+	err = db.Transaction(func(tx *gorm.DB) error {
+		return tx.Model(&model.Ticket{}).
+			Where("order_id = ?", order.ID).
+			Updates(map[string]interface{}{
+				"status":        "CHECKED_IN",
+				"checked_in_at": &now,
+			}).Error
+	})
+
+	if err != nil {
+		return utils.ErrorResponse(
+			c,
+			fiber.StatusInternalServerError,
+			"Check-in thất bại",
+			err,
+		)
+	}
+
+	// 5️⃣ Build danh sách ghế
+	seats := make([]string, 0, len(order.Tickets))
+	for _, ticket := range order.Tickets {
+		seat := ticket.ShowtimeSeat.Seat
+		if seat.ID != 0 {
+			seats = append(seats, fmt.Sprintf("%s%d", seat.Row, seat.Column))
+		}
+	}
+
+	// 6️⃣ Trả response
+	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
+		"message":       fmt.Sprintf("Check-in thành công %d vé!", len(order.Tickets)),
+		"orderCode":     order.PublicCode,
+		"customer_name": order.CustomerName,
+		"movie":         showtime.Movie.Title,
+		"showtime":      showtime.StartTime.Format("15:04 - 02/01/2006"),
+		"seats":         strings.Join(seats, ", "),
+		"checked_in_at": now.Format("15:04:05"),
 	})
 }

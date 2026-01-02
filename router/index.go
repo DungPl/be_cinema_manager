@@ -32,6 +32,7 @@ func SetupRoutes(app *fiber.App) {
 	staff.Get("/seats/held/:code", middleware.Protected(), handler.GetHeldSeatsForStaff)
 	staff.Post("/seats/release/:code", middleware.Protected(), handler.ReleaseSeatForStaff)
 	staff.Post("/ticket/create/:code", middleware.Protected(), handler.CreateTicketForStaff)
+	staff.Post("/ticket/checkin", middleware.Protected(), handler.CheckinByOrderCode)
 	staff.Get("/:staffId", middleware.Protected(), validate.GetById("staffId"), handler.GetStaffById)
 	staff.Post("/", middleware.Protected(), validate.CreateStaff(), handler.CreateStaff)
 	staff.Put("/:staffId", middleware.Protected(), validate.EditStaff("staffId"), handler.EditStaff)
@@ -177,7 +178,8 @@ func SetupRoutes(app *fiber.App) {
 
 	donhang := v1.Group("/don-hang")
 	donhang.Get("/", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.GetMyOrders)
-	donhang.Get("/:orderCode", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.GetOrderDetail)
+	donhang.Get("/thanh-cong/:orderCode", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.GetOrderSuccessDetail)
+	donhang.Get("/:orderCode", middleware.OptionalJWT(), middleware.OptionalAuth())
 	donhang.Post("/cancel-by-code", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.CancelOrderByCode)
 	donhang.Post("/:publicCode/cancel", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.CancelOrderByUser)
 	khachhang := v1.Group("/khach-hang")

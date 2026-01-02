@@ -86,7 +86,6 @@ func GetMyOrders(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusOK, response)
 }
-
 func GetOrderDetail(c *fiber.Ctx) error {
 	orderCode := c.Params("orderCode")
 
@@ -102,41 +101,86 @@ func GetOrderDetail(c *fiber.Ctx) error {
 		return utils.ErrorResponse(c, fiber.StatusNotFound, "Không tìm thấy đơn hàng", err)
 	}
 
-	// Tạo mảng seats từ Tickets
+	// Tạo danh sách ghế (label)
 	seats := []string{}
-	ticketsResponse := []map[string]interface{}{}
-
 	for _, ticket := range order.Tickets {
-		// Lấy label ghế (Row + Column)
 		seat := ticket.ShowtimeSeat.Seat
 		if seat.ID != 0 {
 			seats = append(seats, fmt.Sprintf("%s%d", seat.Row, seat.Column))
 		}
-
-		// Generate QR code base64
-		qrContent := fmt.Sprintf("https://yourdomain.com/checkin/%s", ticket.TicketCode)
-		qrBytes, err := utils.GenerateQRCode(qrContent, 256) // size 256x256
-		qrBase64 := ""
-		if err == nil {
-			qrBase64 = base64.StdEncoding.EncodeToString(qrBytes)
-		} else {
-			log.Printf("Error generating QR for ticket %s: %v", ticket.TicketCode, err)
-		}
-
-		ticketsResponse = append(ticketsResponse, map[string]interface{}{
-			"ticketCode": ticket.TicketCode,
-			"qrCode":     "data:image/png;base64," + qrBase64, // base64 string với prefix
-		})
 	}
 
-	// Response
+	// === TẠO 1 QR DUY NHẤT CHO CẢ ĐƠN HÀNG ===
+	qrContent := order.PublicCode                        // hoặc link: https://yourdomain.com/staff/checkin/order?code=ORD-ABC123
+	qrBytes, err := utils.GenerateQRCode(qrContent, 400) // size lớn hơn cho dễ quét
+	qrBase64 := ""
+	if err != nil {
+		log.Printf("Lỗi tạo QR cho đơn hàng %s: %v", order.PublicCode, err)
+	} else {
+		qrBase64 = "data:image/png;base64," + base64.StdEncoding.EncodeToString(qrBytes)
+	}
+	languageLabel := utils.GetLanguageLabel(utils.LanguageType(order.Showtime.LanguageType))
+	// Response – chỉ 1 qrCode cho cả đơn
+	response := map[string]interface{}{
+		"orderCode":     order.PublicCode,
+		"movieTitle":    order.Showtime.Movie.Title,
+		"showtime":      order.Showtime.StartTime.Format("15:04 - 02/01/2006"),
+		"format":        order.Showtime.Format, // nếu có field format trong Showtime
+		"language":      languageLabel,
+		"seats":         seats,
+		"totalAmount":   order.TotalAmount,
+		"paymentMethod": order.PaymentMethod,
+		"paidAt":        order.PaidAt.Format("15:04 - 02/01/2006"),
+		"customerName":  order.CustomerName,
+		"phone":         order.Phone,
+		"email":         order.Email,
+		"qrCode":        qrBase64, // ← 1 QR DUY NHẤT
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, response)
+}
+func GetOrderSuccessDetail(c *fiber.Ctx) error {
+	orderCode := c.Params("orderCode")
+
+	var order model.Order
+	if err := database.DB.
+		Preload("Tickets").
+		Preload("Tickets.ShowtimeSeat").
+		Preload("Tickets.ShowtimeSeat.Seat").
+		Preload("Showtime").
+		Preload("Showtime.Movie").
+		Where("public_code = ?", orderCode).
+		First(&order).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Không tìm thấy đơn hàng", err)
+	}
+
+	// Tạo danh sách ghế
+	seats := []string{}
+	for _, ticket := range order.Tickets {
+		seat := ticket.ShowtimeSeat.Seat
+		if seat.ID != 0 {
+			seats = append(seats, fmt.Sprintf("%s%d", seat.Row, seat.Column))
+		}
+	}
+
+	// === TẠO 1 QR DUY NHẤT CHO CẢ ĐƠN HÀNG ===
+	qrContent := order.PublicCode // hoặc link check-in
+	qrBytes, err := utils.GenerateQRCode(qrContent, 400)
+	qrBase64 := ""
+	if err == nil {
+		qrBase64 = "data:image/png;base64," + base64.StdEncoding.EncodeToString(qrBytes)
+	} else {
+		log.Printf("Lỗi tạo QR đơn hàng: %v", err)
+	}
+
+	// Response – chỉ 1 qrCode
 	response := map[string]interface{}{
 		"orderCode":   order.PublicCode,
 		"movieTitle":  order.Showtime.Movie.Title,
-		"showtime":    order.Showtime.StartTime.Format("02/01/2006 15:04"),
-		"seats":       seats, // mảng string ["A1", "A2", "B1"]
+		"showtime":    order.Showtime.StartTime.Format("15:04 - 02/01/2006"),
+		"seats":       seats,
 		"totalAmount": order.TotalAmount,
-		"tickets":     ticketsResponse,
+		"qrCode":      qrBase64, // ← 1 QR duy nhất
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, response)
