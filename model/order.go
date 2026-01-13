@@ -20,4 +20,6 @@ type Order struct {
 	Email         string     `json:"email"`
 	CreatedBy     uint       `json:"createdBy"` // One-to-Many với Ticket
 	CancelledAt   *time.Time `json:"cancelledAt"`
+	RefundAmount  float64    `json:"refundAmount"`
+	ActualRevenue float64    `json:"actualRevenue"`
 }

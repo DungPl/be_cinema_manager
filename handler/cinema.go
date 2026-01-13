@@ -41,8 +41,8 @@ func GetCinema(c *fiber.Ctx) error {
 
 	if filterInput.Limit != nil && *filterInput.Limit > 0 {
 		limit = *filterInput.Limit
-		if limit > 100 {
-			limit = 100
+		if limit > 500 {
+			limit = 500
 		}
 	}
 	if filterInput.Page != nil && *filterInput.Page > 0 {
@@ -382,6 +382,11 @@ func CreateCinema(c *fiber.Ctx) error {
 
 	newAddress := model.Address{
 		CinemaId:    newCinema.ID,
+		Province:    input.Address.Province,
+		District:    input.Address.District,
+		Street:      input.Address.Street,
+		Ward:        input.Address.Ward,
+		HouseNumber: input.Address.HouseNumber,
 		Latitude:    input.Address.Latitude,
 		Longitude:   input.Address.Longitude,
 		FullAddress: strings.TrimSpace(input.Address.FullAddress), // Ưu tiên từ frontend (đã đẹp từ display)

@@ -44,16 +44,19 @@ type ShowtimeSeat struct {
 }
 type ShowtimeResponse struct {
 	DTO
-	Format       string    `json:"format"`
-	Price        float64   `json:"price"`
-	Movie        Movie     `json:"movie"`
-	Room         Room      `json:"room"`
-	StartTime    time.Time `json:"start_time"`
-	EndTime      time.Time `json:"end_time"`
-	FillRate     float64   `json:"fill_rate"`
-	BookedSeats  int64     `json:"booked_seats"`
-	TotalSeats   int64     `json:"total_seats"`
-	LanguageType string    `json:"language_type"`
+	Format         string    `json:"format"`
+	Price          float64   `json:"price"`
+	Movie          Movie     `json:"movie"`
+	Room           Room      `json:"room"`
+	StartTime      time.Time `json:"start_time"`
+	EndTime        time.Time `json:"end_time"`
+	FillRate       float64   `json:"fill_rate"`
+	BookedSeats    int64     `json:"booked_seats"`
+	TotalSeats     int64     `json:"total_seats"`
+	LanguageType   string    `json:"language_type"`
+	BookedRevenue  float64   `json:"booked_revenue"`  // Tổng tiền bán vé (không trừ hoàn)
+	ActualRevenue  float64   `json:"actual_revenue"`  // Tiền rạp thực nhận (sau hoàn tiền)
+	RefundedAmount float64   `json:"refunded_amount"` // Tổng tiền đã hoàn cho suất này
 }
 type CreateShowtimeBatchInput struct {
 	MovieID      uint     `json:"movieId" validate:"required"`

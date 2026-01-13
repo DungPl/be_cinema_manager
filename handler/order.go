@@ -1,16 +1,22 @@
 package handler
 
 import (
+	"bytes"
 	"cinema_manager/database"
 	"cinema_manager/model"
 	"cinema_manager/utils"
 	"encoding/base64"
 	"fmt"
+	"html/template"
+	"io"
 	"log"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"gopkg.in/gomail.v2"
+	"gorm.io/gorm"
 )
 
 func GetMyOrders(c *fiber.Ctx) error {
@@ -47,25 +53,24 @@ func GetMyOrders(c *fiber.Ctx) error {
 				seats = append(seats, seatLabel)
 			}
 
-			qrContent := fmt.Sprintf("https://yourdomain.com/checkin/%s", ticket.TicketCode)
-			qrBytes, err := utils.GenerateQRCode(qrContent, 256)
-			qrBase64 := ""
-			if err == nil {
-				qrBase64 = base64.StdEncoding.EncodeToString(qrBytes)
-			}
-
 			tickets = append(tickets, map[string]interface{}{
 				"ticketCode": ticket.TicketCode,
 				"seatLabel":  seatLabel,
-				"qrCode":     "data:image/png;base64," + qrBase64,
 			})
 		}
-
+		qrContent := order.PublicCode
+		qrBytes, err := utils.GenerateQRCode(qrContent, 400) // size lớn hơn cho dễ quét
+		qrBase64 := ""
+		if err != nil {
+			log.Printf("Lỗi tạo QR cho đơn hàng %s: %v", order.PublicCode, err)
+		} else {
+			qrBase64 = "data:image/png;base64," + base64.StdEncoding.EncodeToString(qrBytes)
+		}
 		// Poster
 		posterUrl := ""
 		if order.Showtime.Movie.Posters != nil {
 			for _, poster := range *order.Showtime.Movie.Posters {
-				if poster.IsPrimary && poster.Url != nil {
+				if poster.Url != nil {
 					posterUrl = *poster.Url
 					break
 				}
@@ -78,9 +83,11 @@ func GetMyOrders(c *fiber.Ctx) error {
 			"showtime":    order.Showtime.StartTime.Format("02/01/2006 15:04"),
 			"seats":       seats,
 			"totalAmount": order.TotalAmount,
-			"paidAt":      order.PaidAt.Format("02/01/2006 15:04"),
+			"At":          order.PaidAt.Format("02/01/2006 15:04"),
 			"poster":      posterUrl,
+			"ticketCount": len(order.Tickets),
 			"tickets":     tickets,
+			"qrCode":      qrBase64,
 		})
 	}
 
@@ -135,6 +142,7 @@ func GetOrderDetail(c *fiber.Ctx) error {
 		"phone":         order.Phone,
 		"email":         order.Email,
 		"qrCode":        qrBase64, // ← 1 QR DUY NHẤT
+		"status":        order.Status,
 	}
 
 	return utils.SuccessResponse(c, fiber.StatusOK, response)
@@ -185,96 +193,152 @@ func GetOrderSuccessDetail(c *fiber.Ctx) error {
 
 	return utils.SuccessResponse(c, fiber.StatusOK, response)
 }
-func CancelOrder(c *fiber.Ctx) error {
-	orderCode := c.Query("orderCode")
-	ticketCodes := strings.Split(c.Query("ticketCodes"), ",")
+func SendCancelConfirmationEmail(order model.Order, refundAmount float64) {
+	// Lấy danh sách ghế
+	seatLabels := make([]string, 0, len(order.Tickets))
+	for _, ticket := range order.Tickets {
+		seat := ticket.ShowtimeSeat.Seat
+		if seat.ID != 0 {
+			seatLabels = append(seatLabels, fmt.Sprintf("%s%d", seat.Row, seat.Column))
+		}
+	}
+	// Data cho template
+	data := utils.OrderConfirmationData{
+		OrderCode:     order.PublicCode,
+		MovieName:     order.Showtime.Movie.Title,
+		Showtime:      order.Showtime.StartTime.Format("15:04 - 02/01/2006"),
+		Seats:         strings.Join(seatLabels, ", "),
+		TotalAmount:   order.TotalAmount,
+		PaymentMethod: order.PaymentMethod,
+		// Thêm thông tin hủy
+		RefundAmount: refundAmount,
+		CancelledAt:  time.Now().Format("15:04 - 02/01/2006"),
+	}
 
+	// Render template hủy vé (tạo file templates/order_cancelled.html)
+	tmplPath := "templates/order_cancelled.html"
+	tmpl, err := template.ParseFiles(tmplPath)
+	if err != nil {
+		log.Printf("Lỗi load template hủy vé: %v", err)
+		return
+	}
+
+	var htmlBody bytes.Buffer
+	if err := tmpl.Execute(&htmlBody, data); err != nil {
+		log.Printf("Lỗi render template hủy vé: %v", err)
+		return
+	}
+
+	// Tạo email
+	m := gomail.NewMessage()
+	m.SetHeader("From", "CinemaPro <cinema_hub@gmail.com>")
+	m.SetHeader("To", order.Email)
+	m.SetHeader("Subject", fmt.Sprintf("Hủy vé thành công - Mã đơn: %s", order.PublicCode))
+	m.SetBody("text/html", htmlBody.String())
+
+	// Nhúng QR code (giống email đặt vé)
+	qrContent := order.PublicCode
+	qrBytes, err := utils.GenerateQRCode(qrContent, 400)
+	if err == nil {
+		m.Embed("qr_cancel.png", gomail.SetCopyFunc(func(w io.Writer) error {
+			_, err := w.Write(qrBytes)
+			return err
+		}), gomail.SetHeader(map[string][]string{
+			"Content-Type":        {"image/png"},
+			"Content-ID":          {"<qr_cancel_code>"},
+			"Content-Disposition": {"inline"},
+		}))
+	}
+
+	// Gửi email async
+	d := gomail.NewDialer(os.Getenv("SMTP_HOST"), 587, os.Getenv("SMTP_USERNAME"), os.Getenv("SMTP_PASSWORD"))
+	if err := d.DialAndSend(m); err != nil {
+		log.Printf("Lỗi gửi email hủy vé cho %s: %v", order.Email, err)
+	} else {
+		log.Printf("Đã gửi email xác nhận hủy vé đến %s (hoàn %fđ)", order.Email, refundAmount)
+	}
+}
+func CancelOrder(c *fiber.Ctx) error {
+	orderCode := c.Params("orderCode")
+	db := database.DB
 	var order model.Order
-	if err := database.DB.Preload("Tickets").Where("public_code = ?", orderCode).First(&order).Error; err != nil {
+	if err := db.Preload("Tickets").
+		Preload("Tickets.ShowtimeSeat").
+		Preload("Tickets.ShowtimeSeat.Seat").
+		Preload("Showtime").
+		Preload("Showtime.Movie").
+		Where("public_code = ?", orderCode).First(&order).Error; err != nil {
 		return utils.ErrorResponse(c, 404, "Không tìm thấy đơn hàng", err)
 	}
 
-	// Kiểm tra thời gian hủy (ví dụ: trước 30 phút)
-	var showtime model.Showtime
-	database.DB.First(&showtime, order.ShowtimeID)
-	if time.Now().Add(30 * time.Minute).After(showtime.StartTime) {
-		return utils.ErrorResponse(c, 400, "Đã quá thời gian hủy", nil)
+	// Không cho hủy nếu đã check-in
+	for _, ticket := range order.Tickets {
+		if ticket.Status == "CHECKED_IN" {
+			return utils.ErrorResponse(c, 400, "Có vé đã check-in, không thể hủy đơn hàng", nil)
+		}
 	}
 
-	tx := database.DB.Begin()
-	for _, ticketCode := range ticketCodes {
-		var ticket model.Ticket
-		if err := tx.Where("ticket_code = ? AND order_id = ?", ticketCode, order.ID).First(&ticket).Error; err != nil {
-			tx.Rollback()
-			return utils.ErrorResponse(c, 400, "Vé không hợp lệ", nil)
+	// Không cho hủy nếu đã hủy rồi
+	if order.Status == "CANCELLED" {
+		return utils.ErrorResponse(c, 400, "Đơn hàng đã được hủy trước đó", nil)
+	}
+
+	// Tính thời gian còn lại đến suất chiếu
+	showtimeStart := order.Showtime.StartTime
+	hoursBefore := time.Until(showtimeStart).Hours()
+
+	var refundPercent float64
+	if hoursBefore >= 2 {
+		refundPercent = 1.0 // 100%
+	} else if hoursBefore >= 1.0 { // 30 phút
+		refundPercent = 0.5 // 50%
+	} else {
+		return utils.ErrorResponse(c, 400, "Quá muộn để hủy vé. Không thể hoàn tiền.", nil)
+	}
+
+	refundAmount := float64(order.TotalAmount) * refundPercent
+	actualRevenue := order.TotalAmount - refundAmount
+	// Transaction: cập nhật trạng thái + hoàn tiền
+	err := db.Transaction(func(tx *gorm.DB) error {
+		// Cập nhật order
+		if err := tx.Model(&order).Updates(map[string]interface{}{
+			"status":         "CANCELLED",
+			"cancelled_at":   time.Now(),
+			"refund_amount":  refundAmount,
+			"actual_revenue": actualRevenue,
+		}).Error; err != nil {
+			return err
+		}
+
+		// Cập nhật tất cả vé
+		if err := tx.Model(&model.Ticket{}).
+			Where("order_id = ?", order.ID).
+			Update("status", "CANCELLED").Error; err != nil {
+			return err
 		}
 
 		// Giải phóng ghế
-		var seat model.ShowtimeSeat
-		tx.First(&seat, ticket.ShowtimeSeatId)
-		seat.Status = "AVAILABLE"
-		seat.HeldBy = ""
-		seat.ExpiredAt = nil
-		tx.Save(&seat)
+		if err := tx.Model(&model.ShowtimeSeat{}).
+			Where("showtime_id = ? AND seat_id IN (SELECT seat_id FROM tickets WHERE order_id = ?)", order.ShowtimeID, order.ID).
+			Update("status", "AVAILABLE").Error; err != nil {
+			return err
+		}
 
-		// Cập nhật vé
-		now := time.Now()
-		ticket.Status = "CANCELLED"
-		ticket.CancelledAt = &now
-		tx.Save(&ticket)
+		return nil
+	})
+
+	if err != nil {
+		return utils.ErrorResponse(c, 500, "Hủy vé thất bại", err)
 	}
 
-	order.Status = "CANCELLED"
-	tx.Save(&order)
-	tx.Commit()
+	// Gửi email thông báo hủy + hoàn tiền (async)
+	go SendCancelConfirmationEmail(order, refundAmount)
 
-	BroadcastShowtime(showtime.ID)
-
-	return utils.SuccessResponse(c, 200, "Hủy vé thành công")
-}
-func CancelTicket(c *fiber.Ctx) error {
-	orderID := c.Params("orderId")
-	var order model.Order
-	if err := database.DB.Preload("Tickets").First(&order, "public_code = ?", orderID).Error; err != nil {
-		return utils.ErrorResponse(c, 404, "Không tìm thấy đơn hàng", err)
-	}
-
-	// Kiểm tra quyền: phải là khách hàng sở hữu
-	customer, _ := c.Locals("customer").(*model.Customer)
-	if customer == nil || (order.CustomerID != nil && *order.CustomerID != customer.ID) {
-		return utils.ErrorResponse(c, 403, "Không có quyền hủy", nil)
-	}
-
-	// Kiểm tra thời gian hủy (ví dụ: trước 30 phút)
-	var showtime model.Showtime
-	database.DB.First(&showtime, order.ShowtimeID)
-	if time.Now().Add(30 * time.Minute).After(showtime.StartTime) {
-		return utils.ErrorResponse(c, 400, "Đã quá thời gian hủy vé", nil)
-	}
-
-	tx := database.DB.Begin()
-	for _, ticket := range order.Tickets {
-		var seat model.ShowtimeSeat
-		tx.First(&seat, ticket.ShowtimeSeatId)
-		seat.Status = "AVAILABLE"
-		seat.HeldBy = ""
-		seat.ExpiredAt = nil
-		tx.Save(&seat)
-
-		ticket.Status = "CANCELLED"
-		now := time.Now()
-		ticket.CancelledAt = &now
-		tx.Save(&ticket)
-	}
-
-	order.Status = "CANCELLED"
-	tx.Save(&order)
-	tx.Commit()
-
-	// Broadcast ghế được giải phóng
-	BroadcastShowtime(showtime.ID)
-
-	return utils.SuccessResponse(c, 200, "Hủy vé thành công")
+	return utils.SuccessResponse(c, 200, fiber.Map{
+		"message":        "Hủy vé thành công",
+		"refund_amount":  refundAmount,
+		"refund_percent": refundPercent * 100,
+	})
 }
 
 // Query params: ?orderCode=ORD-ABC123&ticketCodes=TKT-123,TKT-456

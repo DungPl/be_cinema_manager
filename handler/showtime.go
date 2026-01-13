@@ -142,23 +142,37 @@ func GetShowtime(c *fiber.Ctx) error {
 				s.ID, []string{"SOLD", "BOOKED"}).
 			Count(&bookedSeats)
 
+		var actualRevenue float64
+		db.Model(&model.Order{}).
+			Select("COALESCE(SUM(orders.actual_revenue), 0)").
+			Where("orders.showtime_id = ?", s.ID).
+			Scan(&actualRevenue)
+		var bookedRevenue float64
+		db.Model(&model.Ticket{}).
+			Joins("JOIN orders ON orders.id = tickets.order_id").
+			Where("tickets.showtime_id = ?", s.ID).
+			Select("COALESCE(SUM(tickets.price), 0)").
+			Scan(&bookedRevenue)
 		fillRate := 0.0
 		if totalSeats > 0 {
 			fillRate = float64(bookedSeats) / float64(totalSeats) * 100
 		}
 
 		responses = append(responses, model.ShowtimeResponse{
-			DTO:          s.DTO,
-			Price:        s.Price,
-			Movie:        s.Movie,
-			Room:         s.Room,
-			StartTime:    s.StartTime,
-			EndTime:      s.EndTime,
-			FillRate:     fillRate,
-			Format:       s.Format,
-			BookedSeats:  bookedSeats,
-			TotalSeats:   totalSeats,
-			LanguageType: string(s.LanguageType),
+			DTO:            s.DTO,
+			Price:          s.Price,
+			Movie:          s.Movie,
+			Room:           s.Room,
+			StartTime:      s.StartTime,
+			EndTime:        s.EndTime,
+			FillRate:       fillRate,
+			Format:         s.Format,
+			BookedSeats:    bookedSeats,
+			TotalSeats:     totalSeats,
+			LanguageType:   string(s.LanguageType),
+			BookedRevenue:  bookedRevenue, // hoặc tính chính xác từ ticket.price
+			ActualRevenue:  actualRevenue,
+			RefundedAmount: float64(bookedSeats)*s.Price - actualRevenue,
 		})
 	}
 	if responses == nil {

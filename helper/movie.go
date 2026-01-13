@@ -10,8 +10,11 @@ import (
 	"github.com/go-co-op/gocron/v2"
 )
 
-// AutoUpdateMovieStatus chạy hàng ngày để cập nhật trạng thái phim
+var movieScheduler gocron.Scheduler
+
 func AutoUpdateMovieStatus() {
+	log.Println("[CRON] AutoUpdateMovieStatus triggered")
+
 	db := database.DB
 	loc := time.FixedZone("ICT", 7*3600)
 	today := time.Now().In(loc).Truncate(24 * time.Hour)
@@ -22,64 +25,59 @@ func AutoUpdateMovieStatus() {
 		return
 	}
 
-	updatedToNow := 0
-	updatedToEnded := 0
-
 	for _, movie := range movies {
 		updated := false
 
-		// 1. COMING_SOON → NOW_SHOWING (ĐÚNG NGÀY PHÁT HÀNH)
-		releaseDate := movie.DateRelease.Time.Truncate(24 * time.Hour)
-		if releaseDate.Equal(today) && movie.StatusMovie == "COMING_SOON" {
+		releaseDate := movie.DateRelease.Time.In(loc).Truncate(24 * time.Hour)
+
+		// Từ COMING_SOON → NOW_SHOWING khi đến hoặc qua ngày khởi chiếu
+		if (today.Equal(releaseDate) || today.After(releaseDate)) && movie.StatusMovie == "COMING_SOON" {
 			movie.StatusMovie = "NOW_SHOWING"
 			updated = true
-			updatedToNow++
 		}
 
-		// 2. NOW_SHOWING → ENDED (date_end < hôm nay)
+		// Từ NOW_SHOWING → ENDED khi qua ngày kết thúc
 		if movie.DateEnd != nil {
-			endDate := movie.DateEnd.Time.Truncate(24 * time.Hour)
-			if endDate.Before(today) && movie.StatusMovie == "NOW_SHOWING" {
+			endDate := movie.DateEnd.Time.In(loc).Truncate(24 * time.Hour)
+			if today.After(endDate) && movie.StatusMovie == "NOW_SHOWING" {
 				movie.StatusMovie = "ENDED"
 				updated = true
-				updatedToEnded++
 			}
 		}
 
 		if updated {
 			if err := db.Save(&movie).Error; err != nil {
-				log.Printf("Lỗi cập nhật phim %s: %v", movie.Title, err)
+				log.Printf("Lỗi cập nhật trạng thái phim '%s': %v", movie.Title, err)
+			} else {
+				log.Printf("Cập nhật trạng thái phim '%s' → %s", movie.Title, movie.StatusMovie)
 			}
 		}
 	}
-
-	log.Printf(
-		"Cron movie status: %d → NOW_SHOWING, %d → ENDED",
-		updatedToNow,
-		updatedToEnded,
-	)
 }
 
 func StartMovieStatusScheduler() {
-	s, err := gocron.NewScheduler()
+	s, err := gocron.NewScheduler(
+		gocron.WithLocation(time.FixedZone("ICT", 7*3600)),
+	)
 	if err != nil {
-		log.Fatal("Lỗi khởi tạo scheduler: ", err)
+		log.Fatal(err)
 	}
 
-	// Chạy lúc 00:05 sáng hàng ngày (giờ Việt Nam)
+	movieScheduler = s
+
 	_, err = s.NewJob(
 		gocron.DailyJob(
 			1,
 			gocron.NewAtTimes(
-				gocron.NewAtTime(0, 5, 0), // 00:05:00
+				gocron.NewAtTime(0, 5, 0),
 			),
 		),
 		gocron.NewTask(AutoUpdateMovieStatus),
 	)
 	if err != nil {
-		log.Fatal("Lỗi tạo job cập nhật trạng thái phim: ", err)
+		log.Fatal(err)
 	}
 
 	s.Start()
-	log.Println("Scheduler cập nhật trạng thái phim đã khởi động (chạy lúc 00:05 hàng ngày)")
+	log.Println("✅ Movie status scheduler started (00:05 ICT)")
 }

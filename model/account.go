@@ -21,6 +21,12 @@ type CreateAccountInput struct {
 	Role     string `json:"role"` // MANAGER MODERATOR SELLER
 	CinemaId *uint  `json:"cinemaId"`
 }
+type UpdateAccountInput struct {
+	Username *string `json:"username,omitempty"` // optional, nếu thay đổi thì check unique
+	Active   *bool   `json:"active,omitempty"`   // bật/tắt tài khoản
+	CinemaId *uint   `json:"cinemaId,omitempty"` // chuyển rạp
+	Role     *string `json:"role,omitempty"`     // thay đổi quyền (rất cẩn thận)
+}
 type UpdateManagerCinemaInput struct {
 	CinemaId *uint `json:"cinemaId" validate:"omitempty"` // Allow null to remove assignment
 }

@@ -18,12 +18,15 @@ type Ticket struct {
 	OrderId        uint       `json:"orderId"`
 	CustomerId     *uint      `gorm:"default:null" json:"customerId"`
 	CreatedBy      uint       `json:"createdBy"`
+	CheckedInBy    *uint      `gorm:"index" json:"checkedInBy,omitempty"`
 	// Relationship – không expose vào JSON mặc định
 	Showtime     Showtime     `gorm:"foreignKey:ShowtimeId" json:"-"`
 	Seat         Seat         `gorm:"foreignKey:SeatId" json:"-"`
 	Order        Order        `gorm:"foreignKey:OrderId" json:"-"`
 	Customer     Customer     `gorm:"foreignKey:CustomerId;constraint:OnDelete:SET NULL" json:"-"`
 	ShowtimeSeat ShowtimeSeat `gorm:"foreignKey:ShowtimeSeatId" json:"-"`
+
+	CheckInStaff *Account `gorm:"foreignKey:CheckedInBy" json:"checkInStaff,omitempty"` // Load tên nhân viên
 }
 type CreateTicketInput struct {
 	ShowtimeID   uint   `json:"showtimeId" validate:"required"`

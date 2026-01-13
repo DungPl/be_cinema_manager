@@ -421,6 +421,7 @@ func PurchaseSeats(c *fiber.Ctx) error {
 		CustomerID:    nil,
 		ShowtimeID:    showtime.ID,
 		TotalAmount:   totalAmount,
+		ActualRevenue: totalAmount,
 		Status:        "PAID",
 		PaymentMethod: input.PaymentMethod,
 		PaidAt:        &now,
@@ -449,12 +450,19 @@ func PurchaseSeats(c *fiber.Ctx) error {
 	var tickets []model.Ticket
 	var seatLabels []string
 	for _, seat := range heldSeats {
+		log.Printf("Ghế %s%d - Loại: %s - Modifier: %.2f - Giá vé: %.0f",
+			seat.Seat.Row, seat.Seat.Column,
+			seat.Seat.SeatType.Type,
+			seat.Seat.SeatType.PriceModifier,
+			showtime.Price*seat.Seat.SeatType.PriceModifier)
+		ticketPrice := showtime.Price * seat.Seat.SeatType.PriceModifier
 		ticket := model.Ticket{
 			OrderId:        order.ID,
 			ShowtimeSeatId: seat.ID,
 			TicketCode:     "TKT-" + uuid.New().String()[:10],
 			Status:         "ISSUED",
 			IssuedAt:       time.Now(),
+			Price:          ticketPrice,
 			SeatId:         seat.SeatId, // ← Sửa: Lấy SeatId từ ShowtimeSeat (id ghế thật)
 			ShowtimeId:     showtime.ID, // ← Thêm nếu cần
 		}
@@ -523,29 +531,36 @@ func PurchaseSeats(c *fiber.Ctx) error {
 
 			// Tạo message gomail
 			m := gomail.NewMessage()
-			m.SetHeader("From", os.Getenv("SMTP_FROM"))
+			m.SetHeader("From", "CinemaPro <cinema_hub@gmail.com>")
 			m.SetHeader("To", email)
-			m.SetHeader("Subject", "Xác nhận đơn hàng #"+order.PublicCode)
+			m.SetHeader("Subject", "Vé xem phim - Mã đơn: "+order.PublicCode)
 			m.SetBody("text/html", htmlBody.String())
 
-			// Đính kèm QR code cho từng vé
-			qrContent := order.PublicCode // hoặc link: https://yourdomain.com/checkin/order/ORD-ABC123
-			qrBytes, err := utils.GenerateQRCode(qrContent, 300)
+			// === TẠO QR VÀ NHÚNG INLINE VỚI CID ===
+			qrContent := order.PublicCode
+			qrBytes, err := utils.GenerateQRCode(qrContent, 400)
 			if err != nil {
-				log.Printf("Lỗi tạo QR đơn hàng: %v", err)
+				log.Printf("Lỗi tạo QR: %v", err)
 			} else {
-				filename := fmt.Sprintf("QR_DonHang_%s.png", order.PublicCode)
-				m.Attach(filename, gomail.SetCopyFunc(func(w io.Writer) error {
-					_, err := w.Write(qrBytes)
-					return err
-				}))
+				// Nhúng inline từ memory bằng SetCopyFunc
+				m.Embed("qr_checkin.png", // tên file giả (không quan trọng)
+					gomail.SetCopyFunc(func(w io.Writer) error {
+						_, err := w.Write(qrBytes)
+						return err
+					}),
+					gomail.SetHeader(map[string][]string{
+						"Content-Type":        {"image/png"},
+						"Content-ID":          {"<qr_checkin_code>"}, // trùng với cid: trong HTML
+						"Content-Disposition": {"inline"},
+					}),
+				)
 			}
 
 			d := gomail.NewDialer(os.Getenv("SMTP_HOST"), 587, os.Getenv("SMTP_USERNAME"), os.Getenv("SMTP_PASSWORD"))
 			if err := d.DialAndSend(m); err != nil {
-				log.Printf("Lỗi gửi email xác nhận: %v", err)
+				log.Printf("Lỗi gửi email: %v", err)
 			} else {
-				log.Printf("Đã gửi email + QR đơn hàng đến: %s", email)
+				log.Printf("Email vé + QR đã gửi đến %s", email)
 			}
 		}()
 	}
@@ -1039,12 +1054,16 @@ func CheckinByOrderCode(c *fiber.Ctx) error {
 	}
 
 	db := database.DB
-
+	accountInfo, _, _, _, isBanve := helper.GetInfoAccountFromToken(c)
+	if !isBanve {
+		return utils.ErrorResponse(c, 403, "FORBIDDEN", nil)
+	}
 	// 1️⃣ Lấy order + tickets + seat + showtime + movie
 	var order model.Order
 	err := db.
 		Preload("Tickets.ShowtimeSeat.Seat").
 		Preload("Tickets.Showtime.Movie").
+		Preload("Tickets.Showtime.Room").
 		Where("public_code = ?", input.Code).
 		First(&order).Error
 
@@ -1099,7 +1118,8 @@ func CheckinByOrderCode(c *fiber.Ctx) error {
 			Where("order_id = ?", order.ID).
 			Updates(map[string]interface{}{
 				"status":        "CHECKED_IN",
-				"checked_in_at": &now,
+				"used_at":       &now,
+				"checked_in_by": accountInfo.AccountId,
 			}).Error
 	})
 
@@ -1123,12 +1143,14 @@ func CheckinByOrderCode(c *fiber.Ctx) error {
 
 	// 6️⃣ Trả response
 	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
-		"message":       fmt.Sprintf("Check-in thành công %d vé!", len(order.Tickets)),
-		"orderCode":     order.PublicCode,
-		"customer_name": order.CustomerName,
+		"message":   fmt.Sprintf("Check-in thành công %d vé!", len(order.Tickets)),
+		"orderCode": order.PublicCode,
+
 		"movie":         showtime.Movie.Title,
 		"showtime":      showtime.StartTime.Format("15:04 - 02/01/2006"),
 		"seats":         strings.Join(seats, ", "),
 		"checked_in_at": now.Format("15:04:05"),
+		"room":          showtime.Room.Name,
+		"ticketCount":   len(order.Tickets),
 	})
 }

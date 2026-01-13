@@ -35,7 +35,7 @@ func GetStaffs(c *fiber.Ctx) error {
 	condition = utils.ApplyPagination(condition, filterInput.Limit, filterInput.Page)
 
 	var staffs model.Staffs
-	condition.Preload("Account").Order("id ASC").Find(&staffs)
+	condition.Preload("Account").Preload("Account.Cinema").Order("id ASC").Find(&staffs)
 	response := &model.ResponseCustom{
 		Rows:       staffs,
 		Limit:      filterInput.Limit,

@@ -22,8 +22,9 @@ func SetupRoutes(app *fiber.App) {
 	account.Get("/", middleware.Protected(), handler.GetAccounts)
 	account.Get("/me", middleware.Protected(), handler.Me)
 	account.Post("/", middleware.Protected(), validate.CreateAccount(), handler.CreateAccount)
+	account.Put("/:accountId", middleware.Protected(), validate.UpdateAccount("accountId"), handler.UpdateAccount)
 	account.Post("/change-password", middleware.Protected(), validate.AdminChangePassword(), handler.AdminChangePassword)
-	account.Patch("/:accountId/active", middleware.Protected(), validate.ActiveAccount(), handler.ActiveAccount)
+	account.Patch("/:accountId/toggle-active", middleware.Protected(), validate.ToggleActiveAccount(), handler.ToggleActiveAccount)
 	account.Put("/:accountId/cinema", middleware.Protected(), validate.UpdateManagerCinema(), handler.UpdateManagerCinema)
 
 	staff := v1.Group("/staff", logger.New())
@@ -38,6 +39,12 @@ func SetupRoutes(app *fiber.App) {
 	staff.Put("/:staffId", middleware.Protected(), validate.EditStaff("staffId"), handler.EditStaff)
 	staff.Delete("/", middleware.Protected(), validate.Delete(), handler.DeleteStaff)
 	staff.Patch("/:staffId/active/:isActive", middleware.Protected(), validate.ActiveStaff(), handler.ActiveStaff)
+	staff.Post("/with-account", middleware.Protected(), validate.CreateStaffWithAccount(), handler.CreateStaffWithAccount)
+	staff.Put("/:staffId", middleware.Protected(), validate.EditStaff("staffId"), handler.EditStaff)
+	staff.Put("/:staffId/account", middleware.Protected(), validate.UpdateStaffAccount("staffId"), handler.UpdateStaffAccount)
+
+	staff.Patch("/:staffId/active/:isActive", middleware.Protected(), validate.ActiveStaff(), handler.ActiveStaff)
+
 	account.Post("/change-password", middleware.Protected(), validate.StaffChangePassword(), handler.StaffChangePassword)
 
 	customer := v1.Group("/customer", logger.New())
@@ -128,15 +135,15 @@ func SetupRoutes(app *fiber.App) {
 	showtime.Put("/:showtimeId", middleware.Protected(), validate.EditShowtime("showtimeId"), handler.EditShowtime)
 	showtime.Delete("/:showtimeId", middleware.Protected(), validate.DeleteShowtime("showtimeId"), handler.DeleteShowtime)
 
-	ticketseller := v1.Group("/ticket", logger.New())
-
-	ticketseller.Get("/", middleware.Protected(), handler.GetTicket)
-
 	statistic := v1.Group("/statistic", logger.New())
 	statistic.Get("/", middleware.Protected(), handler.GetAdminStats)
-	// Admin
-	ticketseller.Get("/admin", middleware.Protected(), handler.GetTicketAdmin)
+	report := v1.Group("/report", logger.New())
+	report.Get("/dashboard", middleware.Protected(), handler.DashboardReport)
+	report.Get("/no-show", middleware.Protected(), handler.NoShowDetailReport)
 
+	report.Get("/check-in", middleware.Protected(), handler.StaffCheckInReport)
+	report.Get("/check-in-detail/:staffid", middleware.Protected(), handler.StaffCheckInDetailReport)
+	report.Get("/no-show-ticket", middleware.Protected(), handler.NoShowTicketReport)
 	// Public
 
 	// ROUTES
@@ -179,8 +186,8 @@ func SetupRoutes(app *fiber.App) {
 	donhang := v1.Group("/don-hang")
 	donhang.Get("/", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.GetMyOrders)
 	donhang.Get("/thanh-cong/:orderCode", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.GetOrderSuccessDetail)
-	donhang.Get("/:orderCode", middleware.OptionalJWT(), middleware.OptionalAuth())
-	donhang.Post("/cancel-by-code", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.CancelOrderByCode)
+	donhang.Get("/:orderCode", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.GetOrderDetail)
+	donhang.Post("/huy/:orderCode", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.CancelOrder)
 	donhang.Post("/:publicCode/cancel", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.CancelOrderByUser)
 	khachhang := v1.Group("/khach-hang")
 	khachhang.Post("/refresh-token", handler.RefreshCustomerToken)

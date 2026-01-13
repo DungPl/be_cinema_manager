@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>Hủy vé thành công - Cinema Hub</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; padding: 20px; }
+    .container { max-width: 600px; margin: auto; background: white; border-radius: 12px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.1); }
+    .header { background: linear-gradient(135deg, #e74c3c, #c0392b); color: white; padding: 30px; text-align: center; }
+    .content { padding: 30px; text-align: center; color: #333; }
+    .qr-box { background: white; padding: 30px; border-radius: 16px; box-shadow: 0 6px 20px rgba(0,0,0,0.08); display: inline-block; margin: 20px 0; }
+    .info { background: #f8f9fa; padding: 20px; border-radius: 10px; margin: 20px 0; text-align: left; }
+    .info table { width: 100%; border-collapse: collapse; }
+    .info td { padding: 10px 0; border-bottom: 1px solid #eee; }
+    .info td:first-child { font-weight: bold; color: #555; width: 140px; }
+    .footer { background: #1a1a1a; color: #aaa; text-align: center; padding: 25px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="header">
+      <h1>Hủy vé thành công</h1>
+      <p>Mã đơn hàng: {{ .OrderCode }}</p>
+    </div>
+
+    <div class="content">
+      <p style="font-size: 18px; color: #e74c3c;">
+        Vé của bạn đã được hủy và hoàn tiền thành công.
+      </p>
+
+      <!-- QR (vẫn giữ để khách lưu nếu cần) -->
+      <div class="qr-box">
+        <img src="cid:qr_cancel_code" alt="Mã đơn hàng" style="width: 300px; height: 300px;" />
+      </div>
+      <p style="color: #666;">(Mã QR đã vô hiệu hóa - không thể check-in)</p>
+
+      <!-- Thông tin hủy -->
+      <div class="info">
+        <table>
+          <tr><td>Phim</td><td>{{ .MovieName }}</td></tr>
+          <tr><td>Suất chiếu</td><td>{{ .Showtime }}</td></tr>
+          <tr><td>Ghế</td><td><strong>{{ .Seats }}</strong></td></tr>
+          <tr><td>Tổng tiền ban đầu</td><td>{{ .TotalAmount }} VND</td></tr>
+          <tr><td>Số tiền hoàn lại</td><td><strong style="color:#27ae60;">{{ .RefundAmount }} VND</strong></td></tr>
+          <tr><td>Thời gian hủy</td><td>{{ .CancelledAt }}</td></tr>
+        </table>
+      </div>
+
+      <p style="color: #555;">
+        Số tiền hoàn sẽ được chuyển về tài khoản thanh toán gốc trong vòng 3-7 ngày làm việc.<br>
+        Nếu có thắc mắc, vui lòng liên hệ hỗ trợ.
+      </p>
+    </div>
+
+    <div class="footer">
+      <p>Cinema Hub - Hệ thống đặt vé xem phim trực tuyến</p>
+      <p>Hỗ trợ: support@cinemahub.vn | Hotline: 1900-1234</p>
+    </div>
+  </div>
+</body>
+</html>

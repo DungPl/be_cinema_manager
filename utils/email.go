@@ -20,6 +20,8 @@ type OrderConfirmationData struct {
 	PaymentMethod string
 	DetailLink    string
 	CancelledLink string
+	RefundAmount  float64
+	CancelledAt   string
 }
 
 // SendOrderConfirmationEmail gửi email xác nhận đơn hàng (async)
