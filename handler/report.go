@@ -248,7 +248,8 @@ func DashboardReport(c *fiber.Ctx) error {
 	toStr := c.Query("to", time.Now().Format("2006-01-02"))
 	cinemaIDStr := c.Query("cinemaId") // optional
 	movieIDStr := c.Query("movieId")   // optional
-	search := c.Query("search", "")    // Tìm theo title, cinema name
+	province := c.Query("province")
+	search := c.Query("search", "") // Tìm theo title, cinema name
 
 	from, _ := time.Parse("2006-01-02", fromStr)
 	to, _ := time.Parse("2006-01-02", toStr)
@@ -267,7 +268,10 @@ func DashboardReport(c *fiber.Ctx) error {
 		limit = 100 // Giới hạn để tránh load nặng
 	}
 	offset := (page - 1) * limit
-
+	var provincePtr *string
+	if province != "" {
+		provincePtr = &province
+	}
 	var cinemaID *uint
 	var movieID *uint
 	if cinemaIDStr != "" {
@@ -301,7 +305,7 @@ func DashboardReport(c *fiber.Ctx) error {
 		cinemaID = accountInfo.CinemaId // Manager chỉ thấy rạp mình quản lý
 	}
 
-	report, err := utils.GetDashboardReport(db, from, to, cinemaID, movieID, search, limit, offset)
+	report, err := utils.GetDashboardReport(db, from, to, cinemaID, movieID, provincePtr, search, limit, offset)
 	if err != nil {
 		return utils.ErrorResponse(c, 500, "Lỗi lấy báo cáo dashboard", err)
 	}
@@ -312,6 +316,8 @@ func DashboardReport(c *fiber.Ctx) error {
 		"kpi":              report.Summary,        // Bao gồm KPI
 		"top_movies":       report.TopMovies,      // Lấy từ query riêng nếu cần (hoặc append vào report)
 		"revenue_cinemas":  report.RevenueCinemas, // Tương tự
+		"daily_metrics":    report.DailyMetrics,
+		"ticket_by_hours":  report.TicketByHours,
 		"occupancy_trends": report.Trends,
 		"pagination": fiber.Map{
 			"currentPage": page,

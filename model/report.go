@@ -31,10 +31,11 @@ type OccupancyTrendItem struct {
 }
 
 type DashboardSummary struct {
-	TotalRevenue   float64 `json:"totalRevenue"`
-	TotalTickets   int64   `json:"totalTickets"`
-	AvgOccupancy   float64 `json:"avgOccupancy"`
-	TotalCustomers int64   `json:"totalCustomers"`
+	TotalRevenue     float64 `json:"totalRevenue"`
+	TotalTickets     int64   `json:"totalTickets"`
+	AvgOccupancy     float64 `json:"avgOccupancy"`
+	TotalCustomers   int64   `json:"totalCustomers"`
+	RevenueChangePct float64 `json:"revenueChangePct"`
 }
 
 type DashboardReport struct {

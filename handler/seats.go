@@ -951,6 +951,7 @@ func CreateTicketForStaff(c *fiber.Ctx) error {
 		CreatedBy:     accountInfo.AccountId,
 		ShowtimeID:    showtime.ID,
 		TotalAmount:   totalAmount, // sẽ tính sau
+		ActualRevenue: totalAmount,
 	}
 	if err := tx.Create(&order).Error; err != nil {
 		tx.Rollback()

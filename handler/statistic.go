@@ -39,6 +39,7 @@ func GetAdminStats(c *fiber.Ctx) error {
 
 	var stats Stats
 	// ĐÚNG: Tạo time object có giờ phút giây cụ thể
+	now := time.Now().In(time.Local)
 	today := time.Now().In(time.Local) // Đảm bảo timezone đúng
 	todayStart := time.Date(today.Year(), today.Month(), today.Day(), 0, 0, 0, 0, today.Location())
 	todayEnd := time.Date(today.Year(), today.Month(), today.Day(), 23, 59, 59, 0, today.Location())
@@ -48,24 +49,24 @@ func GetAdminStats(c *fiber.Ctx) error {
 	db.Model(&model.Cinema{}).Count(&stats.Cinemas)
 	db.Model(&model.Room{}).Count(&stats.Rooms)
 	db.Model(&model.Movie{}).Count(&stats.Movies)
-	// Doanh thu hôm nay
+	// Doanh thu
 	db.Raw(`
-        SELECT COALESCE(SUM(price), 0)
-        FROM tickets
-        WHERE status = 'BOOKED'
-          AND created_at BETWEEN ? AND ?
-    `, todayStart, todayEnd).Scan(&stats.TodayRevenue)
-
-	// Số vé hôm nay
+		SELECT COALESCE(SUM(o.actual_revenue),0)
+		FROM orders o
+		WHERE o.status = 'PAID'
+		  AND o.created_at BETWEEN ? AND ?
+	`, todayStart, todayEnd).Scan(&stats.TodayRevenue)
+	//tổng số vé đã bán
 	db.Raw(`
-        SELECT COUNT(*) 
-        FROM tickets t
-        WHERE t.status = 'BOOKED'
-          AND t.created_at BETWEEN ? AND ?
-    `, todayStart, todayEnd).Scan(&stats.TodayTickets)
+		SELECT COUNT(t.id)
+		FROM tickets t
+		JOIN orders o ON o.id = t.order_id
+		WHERE o.status = 'PAID'
+		  AND o.created_at BETWEEN ? AND ?
+	`, todayStart, todayEnd).Scan(&stats.TodayTickets)
 
 	db.Model(&model.Showtime{}).
-		Where("start_time > ? AND start_time < ?", time.Now(), time.Now().Add(24*time.Hour)).
+		Where("start_time BETWEEN ? AND ?", now, now.Add(24*time.Hour)).
 		Count(&stats.UpcomingShows)
 
 	// === Hôm qua ===
@@ -77,21 +78,22 @@ func GetAdminStats(c *fiber.Ctx) error {
 	var yesterdayShows int64
 
 	db.Raw(`
-        SELECT COALESCE(SUM(price), 0)
-        FROM tickets
-        WHERE status = 'BOOKED'
-          AND created_at BETWEEN ? AND ?
-    `, yesterdayStart, yesterdayEnd).Scan(&yesterdayRevenue)
+		SELECT COALESCE(SUM(o.actual_revenue),0)
+		FROM orders o
+		WHERE o.status = 'PAID'
+		  AND o.created_at BETWEEN ? AND ?
+	`, yesterdayStart, yesterdayEnd).Scan(&yesterdayRevenue)
 
-	// Số vé hôm qua
 	db.Raw(`
-        SELECT COUNT(*) 
-        FROM tickets t
-        WHERE t.status = 'BOOKED'
-          AND t.created_at BETWEEN ? AND ?
-    `, yesterdayStart, yesterdayEnd).Scan(&yesterdayTickets)
+		SELECT COUNT(t.id)
+		FROM tickets t
+		JOIN orders o ON o.id = t.order_id
+		WHERE o.status = 'PAID'
+		  AND o.created_at BETWEEN ? AND ?
+	`, yesterdayStart, yesterdayEnd).Scan(&yesterdayTickets)
+
 	db.Model(&model.Showtime{}).
-		Where("start_time > ? AND start_time < ?", yesterdayStart, yesterdayEnd).
+		Where("start_time BETWEEN ? AND ?", yesterdayStart, yesterdayEnd).
 		Count(&yesterdayShows)
 
 	// === Tính % tăng trưởng ===

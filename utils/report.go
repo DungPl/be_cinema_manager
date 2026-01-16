@@ -472,7 +472,11 @@ type DashboardKPI struct {
 	TicketsSold     int64   `json:"ticketsSold"`
 	OccupancyRate   float64 `json:"occupancyRate"`
 	UniqueCustomers int64   `json:"uniqueCustomers"`
+
 	RevenueChange   float64 `json:"revenueChangePct"` // % thay đổi so với kỳ trước
+	TicketChange    float64 `json:"ticketChangePct"`
+	CustomerChange  float64 `json:"customerChangePct"`
+	OccupancyChange float64 `json:"occupancyChangePct"`
 }
 
 type TopMovieItem struct {
@@ -483,12 +487,16 @@ type TopMovieItem struct {
 	OccupancyAvg   float64 `json:"occupancyAvg"`
 	AvgRating      float64 `json:"avgRating"` // Nếu Movie có rating
 }
-
+type TicketByHourItem struct {
+	TimeRange string  `json:"timeRange"` // "09-12"
+	Tickets   int64   `json:"tickets"`
+	Percent   float64 `json:"percent"`
+}
 type RevenueByCinemaItem struct {
 	CinemaName     string  `json:"cinemaName"`
 	Revenue        float64 `json:"revenue"`
 	Tickets        int64   `json:"tickets"`
-	Occupancy      float64 `json:"occupancy"`
+	OccupancyAvg   float64 `json:"occupancyAvg"`
 	AvgTicketPrice float64 `json:"avgTicketPrice"`
 }
 
@@ -502,6 +510,16 @@ type DashboardSummary struct {
 	TotalTickets   int64   `json:"totalTickets"`
 	AvgOccupancy   float64 `json:"avgOccupancy"`
 	TotalCustomers int64   `json:"totalCustomers"`
+
+	PrevTotalRevenue   float64 `json:"prevTotalRevenue"`
+	PrevTotalTickets   int64   `json:"prevTotalTickets"`
+	PrevAvgOccupancy   float64 `json:"prevAvgOccupancy"`
+	PrevTotalCustomers int64   `json:"prevTotalCustomers"`
+
+	RevenueChangePct   float64 `json:"revenueChangePct"`
+	TicketChangePct    float64 `json:"ticketChangePct"`
+	CustomerChangePct  float64 `json:"customerChangePct"`
+	OccupancyChangePct float64 `json:"occupancyChangePct"`
 }
 
 type DashboardReport struct {
@@ -511,8 +529,20 @@ type DashboardReport struct {
 	Trends         []OccupancyTrendItem  `json:"trends,omitempty"`
 	TopMovies      []TopMovieItem        `json:"top_movies"`
 	RevenueCinemas []RevenueByCinemaItem `json:"revenue_cinemas"`
+	DailyMetrics   []DailyMetric         `json:"daily_metrics"`
+	TicketByHours  []TicketByHourItem    `json:"ticket_by_hours"`
 }
-
+type PrevKPI struct {
+	Revenue   float64
+	Tickets   int64
+	Customers int64
+	Occupancy float64
+}
+type DailyMetric struct {
+	Date    string  `json:"date"` // "02/01"
+	Revenue float64 `json:"revenue"`
+	Tickets int64   `json:"tickets"`
+}
 type PaginationInfo struct {
 	CurrentPage int  `json:"currentPage"`
 	TotalPages  int  `json:"totalPages"`
@@ -522,10 +552,17 @@ type PaginationInfo struct {
 	HasPrev     bool `json:"hasPrev"`
 }
 
+func pctChange(current, previous float64) float64 {
+	if previous == 0 {
+		return 0
+	}
+	return (current - previous) / previous * 100
+}
 func GetDashboardReport(
 	db *gorm.DB,
 	from, to time.Time,
 	cinemaID, movieID *uint,
+	province *string,
 	search string,
 	limit, offset int,
 ) (*DashboardReport, error) {
@@ -533,154 +570,405 @@ func GetDashboardReport(
 	from = time.Date(from.Year(), from.Month(), from.Day(), 0, 0, 0, 0, from.Location())
 	to = time.Date(to.Year(), to.Month(), to.Day(), 23, 59, 59, 999999999, to.Location())
 
-	// 1. Query KPI (tổng hợp)
+	// 1. KPI hiện tại
 	var kpi DashboardKPI
 	kpiQuery := `
-SELECT 
-    COALESCE(SUM(o.actual_revenue), 0) AS total_revenue,
-    COUNT(t.id) AS tickets_sold,
-    COUNT(DISTINCT o.customer_name) AS unique_customers,
-    COALESCE(AVG(
-        (SELECT COUNT(tt.id)::float FROM tickets tt 
-         WHERE tt.showtime_id = st.id 
-           AND tt.status IN ('PAID','ISSUED','CHECK_IN','EXPIRED')
-        ) / NULLIF(
-            (SELECT COUNT(sts.id) FROM showtime_seats sts WHERE sts.showtime_id = st.id),
-            0
-        ) * 100
-    ), 0) AS occupancy_rate
-FROM orders o
-LEFT JOIN tickets t ON t.order_id = o.id
-LEFT JOIN showtimes st ON t.showtime_id = st.id
-WHERE o.created_at >= $1  -- dùng created_at của order thay vì start_time
-  AND o.created_at <= $2
-  AND ($3::bigint IS NULL OR st.room_id IN (SELECT id FROM rooms WHERE cinema_id = $3))
-  AND ($4::bigint IS NULL OR st.movie_id = $4)
-  AND ($5::text IS NULL OR $5 = '' OR o.public_code ILIKE '%' || $5 || '%' OR o.customer_name ILIKE '%' || $5 || '%')
+WITH paid_orders AS (
+    SELECT DISTINCT
+        o.id,
+        o.actual_revenue,
+        o.customer_name,
+        o.created_at
+    FROM orders o
+    JOIN tickets t ON t.order_id = o.id
+    JOIN showtimes st ON t.showtime_id = st.id
+    JOIN rooms r ON st.room_id = r.id
+    JOIN cinemas cin ON r.cinema_id = cin.id
+    LEFT JOIN addresses a ON cin.id = a.cinema_id
+    WHERE o.status = 'PAID'
+      AND o.created_at >= $1
+      AND o.created_at <= $2
+      AND ($3::bigint IS NULL OR cin.id = $3)
+      AND ($4::bigint IS NULL OR st.movie_id = $4)
+      AND ($5::text IS NULL OR $5 = '' OR LOWER(a.province) = LOWER($5))
+      AND ($6::text IS NULL OR $6 = '' OR o.public_code ILIKE '%' || $6 || '%' OR o.customer_name ILIKE '%' || $6 || '%')
+),
+paid_tickets AS (
+    SELECT 
+        t.id,
+        t.showtime_id
+    FROM tickets t
+    JOIN paid_orders po ON t.order_id = po.id
+),
+showtime_occupancy AS (
+    SELECT 
+        AVG(
+            (SELECT COUNT(tt.id)::float 
+             FROM tickets tt 
+             WHERE tt.showtime_id = st.id 
+               AND tt.status IN ('PAID','ISSUED','CHECK_IN','EXPIRED')
+            ) / NULLIF(
+                (SELECT COUNT(sts.id) 
+                 FROM showtime_seats sts 
+                 WHERE sts.showtime_id = st.id),
+                0
+            ) * 100
+        ) AS occupancy_rate
+    FROM showtimes st
+    JOIN rooms r ON st.room_id = r.id
+    JOIN cinemas cin ON r.cinema_id = cin.id
+    LEFT JOIN addresses a ON cin.id = a.cinema_id
+    WHERE st.start_time >= $1 AND st.start_time <= $2
+      AND ($3::bigint IS NULL OR cin.id = $3)
+      AND ($4::bigint IS NULL OR st.movie_id = $4)
+      AND ($5::text IS NULL OR LOWER(a.province) = LOWER($5))
+)
+SELECT
+    COALESCE(SUM(po.actual_revenue), 0) AS total_revenue,
+    (SELECT COUNT(DISTINCT pt.id) FROM paid_tickets pt) AS tickets_sold,
+    COUNT(DISTINCT po.customer_name) AS unique_customers,
+    COALESCE((SELECT occupancy_rate FROM showtime_occupancy), 0) AS occupancy_rate
+FROM paid_orders po;
 `
-	err := db.Raw(kpiQuery, from, to, cinemaID, movieID, search).Scan(&kpi).Error
+	err := db.Raw(kpiQuery, from, to, cinemaID, movieID, province, search).Scan(&kpi).Error
 	if err != nil {
 		return nil, err
 	}
 
-	// Tính revenue change (so với kỳ trước 7 ngày)
+	// 2. KPI kỳ trước (7 ngày trước) - truyền đúng tham số thời gian
 	prevFrom := from.AddDate(0, 0, -7)
 	prevTo := to.AddDate(0, 0, -7)
-	var prevRevenue float64
-	db.Raw("SELECT COALESCE(SUM(actual_revenue), 0) FROM orders WHERE created_at BETWEEN $1 AND $2", prevFrom, prevTo).Scan(&prevRevenue)
-	if prevRevenue > 0 {
-		kpi.RevenueChange = (kpi.TotalRevenue - prevRevenue) / prevRevenue * 100
+	var prevKPI struct {
+		TotalRevenue    float64
+		TicketsSold     int64
+		UniqueCustomers int64
+		OccupancyRate   float64
+	}
+	err = db.Raw(kpiQuery, prevFrom, prevTo, cinemaID, movieID, province, search).Scan(&prevKPI).Error
+	if err != nil {
+		return nil, err
 	}
 
-	// 2. Top 5 Movies (items)
-	var topMovies []TopMovieItem
+	// Tính % thay đổi
+	kpi.RevenueChange = pctChange(kpi.TotalRevenue, prevKPI.TotalRevenue)
+	kpi.TicketChange = pctChange(float64(kpi.TicketsSold), float64(prevKPI.TicketsSold))
+	kpi.CustomerChange = pctChange(float64(kpi.UniqueCustomers), float64(prevKPI.UniqueCustomers))
+	kpi.OccupancyChange = kpi.OccupancyRate - prevKPI.OccupancyRate
 
+	// 3. Top 5 Movies
+	var topMovies []TopMovieItem
 	topQuery := `
-SELECT 
+WITH filtered_showtimes AS (
+    SELECT
+        st.id AS showtime_id,
+        st.movie_id
+    FROM showtimes st
+    JOIN rooms r ON r.id = st.room_id
+    JOIN cinemas cin ON cin.id = r.cinema_id
+    LEFT JOIN addresses a ON a.cinema_id = cin.id
+    WHERE st.start_time BETWEEN $1 AND $2
+         AND ($3::bigint IS NULL OR cin.id = $3)
+      AND ($4::bigint IS NULL OR st.movie_id = $4)
+      AND ($5::text IS NULL OR LOWER(a.province) = LOWER($5))
+),
+
+order_movie AS (
+    -- 1 ORDER = 1 MOVIE
+    SELECT DISTINCT
+        o.id,
+        o.actual_revenue,
+        st.movie_id
+    FROM orders o
+    JOIN tickets t ON t.order_id = o.id
+    JOIN showtimes st ON st.id = t.showtime_id
+    JOIN filtered_showtimes fs ON fs.showtime_id = st.id
+    WHERE o.status = 'PAID'
+),
+
+movie_revenue AS (
+    SELECT
+        movie_id,
+        SUM(actual_revenue) AS revenue
+    FROM order_movie
+    GROUP BY movie_id
+),
+
+movie_tickets AS (
+    SELECT
+        st.movie_id,
+        COUNT(t.id) AS tickets
+    FROM tickets t
+    JOIN orders o ON o.id = t.order_id AND o.status = 'PAID'
+    JOIN showtimes st ON st.id = t.showtime_id
+    JOIN filtered_showtimes fs ON fs.showtime_id = st.id
+    GROUP BY st.movie_id
+),
+movie_showtimes_count AS (
+    SELECT
+        movie_id,
+        COUNT(DISTINCT showtime_id) AS showtimes_count
+    FROM filtered_showtimes
+    GROUP BY movie_id
+),
+-- ✅ 1️⃣ Occupancy THEO SHOWTIME
+showtime_occupancy AS (
+    SELECT
+        st.movie_id,
+        st.id AS showtime_id,
+        COUNT(*) FILTER (
+            WHERE s.status IN ('SOLD','CHECKED_IN','EXPIRED')
+        )::float
+        / NULLIF(COUNT(s.id),0) * 100 AS occupancy
+    FROM showtimes st
+    JOIN showtime_seats s ON s.showtime_id = st.id
+    JOIN filtered_showtimes fs ON fs.showtime_id = st.id
+    GROUP BY st.movie_id, st.id
+),
+
+-- ✅ 2️⃣ AVG occupancy theo MOVIE
+movie_occupancy AS (
+    SELECT
+        movie_id,
+        AVG(occupancy) AS occupancy_avg
+    FROM showtime_occupancy
+    GROUP BY movie_id
+)
+
+SELECT
     m.title,
-    COALESCE(SUM(o.actual_revenue), 0) AS revenue,
-    COUNT(t.id) AS tickets,
-    COUNT(DISTINCT st.id) AS showtimes_count,
-    COALESCE(AVG(
-        (SELECT COUNT(tt.id)::float
-         FROM tickets tt 
-         WHERE tt.showtime_id = st.id 
-           AND tt.status IN ('PAID','ISSUED','CHECK_IN','EXPIRED')
-        ) / NULLIF(
-            (SELECT COUNT(sts.id)
-             FROM showtime_seats sts
-             WHERE sts.showtime_id = st.id),
-            0
-        ) * 100
-    ), 0) AS occupancy_avg
+    COALESCE(r.revenue,0) AS revenue,
+    COALESCE(t.tickets,0) AS tickets,
+    COALESCE(sc.showtimes_count,0) AS showtimes_count,
+    COALESCE(o.occupancy_avg,0) AS occupancy_avg,
+    0 AS avg_rating
 FROM movies m
-JOIN showtimes st ON m.id = st.movie_id
-JOIN rooms r ON st.room_id = r.id
-LEFT JOIN tickets t ON st.id = t.showtime_id
-LEFT JOIN orders o ON t.order_id = o.id
-WHERE st.start_time BETWEEN $1 AND $2
-  AND ($3::bigint IS NULL OR r.cinema_id = $3)
-  AND ($4::bigint IS NULL OR m.id = $4)
-  AND ($5::text IS NULL OR $5 = '' OR m.title ILIKE '%' || $5 || '%')
-GROUP BY m.id, m.title
-HAVING COALESCE(SUM(o.actual_revenue), 0) > 0 OR COUNT(t.id) > 0
-ORDER BY revenue DESC
+LEFT JOIN movie_revenue r ON r.movie_id = m.id
+LEFT JOIN movie_tickets t ON t.movie_id = m.id
+LEFT JOIN movie_showtimes_count sc ON sc.movie_id = m.id
+LEFT JOIN movie_occupancy o ON o.movie_id = m.id
+WHERE r.revenue IS NOT NULL
+ORDER BY r.revenue DESC
 LIMIT 5;
 
 `
-
-	err = db.Raw(topQuery, from, to, cinemaID, movieID, search).Scan(&topMovies).Error
+	err = db.Raw(topQuery, from, to, cinemaID, movieID, province).Scan(&topMovies).Error
 	if err != nil {
 		return nil, err
 	}
 
-	// 3. Revenue by Cinema (thêm vào items nếu cần, hoặc riêng)
+	// 4. Doanh thu theo rạp + avg_ticket_price từ tickets.price
 	var revenueCinemas []RevenueByCinemaItem
-
 	revenueQuery := `
-WITH showtime_stats AS (
-  SELECT
-    st.id AS showtime_id,
-    COUNT(*) FILTER (
-      WHERE s.status IN ('BOOKED','CHECKED_IN','EXPIRED')
-    ) AS occupied_seats,
-    COUNT(*) AS total_seats
-  FROM showtimes st
-  JOIN showtime_seats s ON st.id = s.showtime_id
-  GROUP BY st.id
+WITH paid_orders AS (
+    SELECT DISTINCT
+        o.id AS order_id,
+        o.actual_revenue,
+        r.cinema_id
+    FROM orders o
+    JOIN tickets t      ON t.order_id = o.id
+    JOIN showtimes st   ON st.id = t.showtime_id
+    JOIN rooms r        ON r.id = st.room_id
+    JOIN cinemas cin    ON cin.id = r.cinema_id
+    LEFT JOIN addresses a ON a.cinema_id = cin.id
+    WHERE o.status = 'PAID'
+      AND st.start_time BETWEEN $1 AND $2
+      AND ($3::bigint IS NULL OR cin.id = $3)
+      AND ($4::bigint IS NULL OR st.movie_id = $4)
+      AND ($5::text IS NULL OR LOWER(a.province) = LOWER($5))
+      AND ($6::text IS NULL OR $6 = '' OR cin.name ILIKE '%' || $6 || '%')
+),
+
+order_ticket_count AS (
+    SELECT
+        o.id AS order_id,
+        COUNT(t.id) AS tickets
+    FROM orders o
+    JOIN tickets t      ON t.order_id = o.id
+    JOIN showtimes st   ON st.id = t.showtime_id
+    JOIN rooms r        ON r.id = st.room_id
+    JOIN cinemas cin    ON cin.id = r.cinema_id
+    LEFT JOIN addresses a ON a.cinema_id = cin.id
+    WHERE o.status = 'PAID'
+      AND st.start_time BETWEEN $1 AND $2
+      AND ($3::bigint IS NULL OR cin.id = $3)
+      AND ($4::bigint IS NULL OR st.movie_id = $4)
+      AND ($5::text IS NULL OR LOWER(a.province) = LOWER($5))
+      AND ($6::text IS NULL OR $6 = '' OR cin.name ILIKE '%' || $6 || '%')
+    GROUP BY o.id
+),
+
+showtime_occupancy AS (
+    SELECT
+        r.cinema_id,
+        st.id AS showtime_id,
+        COUNT(*) FILTER (
+            WHERE ss.status IN ('SOLD','CHECKED_IN','EXPIRED')
+        )::float
+        / NULLIF(COUNT(ss.id), 0) * 100 AS occupancy
+    FROM showtimes st
+    JOIN rooms r ON r.id = st.room_id
+    JOIN cinemas cin ON cin.id = r.cinema_id
+    JOIN showtime_seats ss ON ss.showtime_id = st.id
+    LEFT JOIN addresses a ON a.cinema_id = cin.id
+    WHERE st.start_time BETWEEN $1 AND $2
+      AND ($3::bigint IS NULL OR cin.id = $3)
+      AND ($4::bigint IS NULL OR st.movie_id = $4)
+      AND ($5::text IS NULL OR LOWER(a.province) = LOWER($5))
+      AND ($6::text IS NULL OR $6 = '' OR cin.name ILIKE '%' || $6 || '%')
+    GROUP BY r.cinema_id, st.id
+),
+
+cinema_occupancy AS (
+    SELECT
+        cinema_id,
+        AVG(occupancy) AS occupancy_avg
+    FROM showtime_occupancy
+    GROUP BY cinema_id
 )
+
 SELECT
-  cin.id,
-  cin.name AS cinema_name,
-  SUM(o.actual_revenue) AS revenue,
-  COUNT(t.id) AS tickets,
-  AVG(
-    ss.occupied_seats::float / NULLIF(ss.total_seats,0) * 100
-  ) AS occupancy,
-  SUM(o.actual_revenue) / NULLIF(COUNT(t.id),0) AS avg_ticket_price
-FROM cinemas cin
-JOIN rooms r ON cin.id = r.cinema_id
-JOIN showtimes st ON r.id = st.room_id
-JOIN tickets t ON st.id = t.showtime_id
-JOIN orders o ON t.order_id = o.id AND o.status = 'PAID'
-JOIN showtime_stats ss ON st.id = ss.showtime_id
-WHERE st.start_time BETWEEN $1 AND $2
-  AND ($3::bigint IS NULL OR cin.id = $3)
-  AND ($4::bigint IS NULL OR st.movie_id = $4)
-  AND ($5::text IS NULL OR $5 = '' OR cin.name ILIKE '%' || $5 || '%')
-GROUP BY cin.id, cin.name
+    cin.id   AS cinema_id,
+    cin.name AS cinema_name,
+
+    SUM(po.actual_revenue)      AS revenue,
+    SUM(ot.tickets)             AS tickets,
+    COUNT(DISTINCT po.order_id) AS total_orders,
+
+    SUM(po.actual_revenue)
+      / NULLIF(SUM(ot.tickets),0) AS avg_ticket_price,
+
+    COALESCE(co.occupancy_avg, 0) AS occupancy_avg
+
+FROM paid_orders po
+JOIN order_ticket_count ot ON ot.order_id = po.order_id
+JOIN cinemas cin ON cin.id = po.cinema_id
+LEFT JOIN cinema_occupancy co ON co.cinema_id = cin.id
+
+GROUP BY cin.id, cin.name, co.occupancy_avg
 ORDER BY revenue DESC;
 
 
-`
 
-	err = db.Raw(revenueQuery, from, to, cinemaID, movieID, search).Scan(&revenueCinemas).Error
+`
+	err = db.Raw(revenueQuery, from, to, cinemaID, movieID, province, search).Scan(&revenueCinemas).Error
 	if err != nil {
 		return nil, err
 	}
 
-	// 4. Occupancy Over Time (trends)
+	// 5. Ticket by hour
+	var ticketByHours []TicketByHourItem
+	ticketByHourQuery := `
+WITH total_tickets AS (
+  SELECT COUNT(t.id) AS total
+  FROM tickets t
+  JOIN showtimes st ON t.showtime_id = st.id
+  JOIN orders o ON t.order_id = o.id AND o.status = 'PAID'
+  WHERE st.start_time BETWEEN $1 AND $2
+),
+hourly_tickets AS (
+  SELECT
+    CASE
+      WHEN EXTRACT(HOUR FROM st.start_time) BETWEEN 9 AND 11 THEN '09-12'
+      WHEN EXTRACT(HOUR FROM st.start_time) BETWEEN 12 AND 14 THEN '12-15'
+      WHEN EXTRACT(HOUR FROM st.start_time) BETWEEN 15 AND 17 THEN '15-18'
+      WHEN EXTRACT(HOUR FROM st.start_time) BETWEEN 18 AND 20 THEN '18-21'
+      WHEN EXTRACT(HOUR FROM st.start_time) BETWEEN 21 AND 23 THEN '21-24'
+      ELSE 'Khác'
+    END AS time_range,
+    COUNT(t.id) AS tickets
+  FROM tickets t
+  JOIN showtimes st ON t.showtime_id = st.id
+  JOIN orders o ON t.order_id = o.id AND o.status = 'PAID'
+  WHERE st.start_time BETWEEN $1 AND $2
+  GROUP BY time_range
+)
+SELECT
+  h.time_range,
+  h.tickets,
+  ROUND(h.tickets::numeric / NULLIF(tt.total, 0) * 100, 2) AS percent
+FROM hourly_tickets h
+CROSS JOIN total_tickets tt
+ORDER BY h.time_range
+`
+	err = db.Raw(ticketByHourQuery, from, to).Scan(&ticketByHours).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// 6. Daily Metrics
+	var dailyMetrics []DailyMetric
+	dailyQuery := `
+WITH daily_orders AS (
+    SELECT DISTINCT
+        DATE(o.created_at) AS order_date,
+        o.id AS order_id,
+        o.actual_revenue
+    FROM orders o
+    JOIN tickets t ON t.order_id = o.id  -- đảm bảo order có vé
+    JOIN showtimes st ON t.showtime_id = st.id
+    JOIN rooms r ON st.room_id = r.id
+    JOIN cinemas cin ON r.cinema_id = cin.id
+    LEFT JOIN addresses a ON cin.id = a.cinema_id
+    WHERE o.created_at >= $1
+      AND o.created_at <= $2
+      AND o.status = 'PAID'
+      -- thêm lọc cinema/movie/province/search nếu cần
+       AND ($3::bigint IS NULL OR cin.id = $3)
+    AND ($4::bigint IS NULL OR st.movie_id = $4)
+      AND ($5::text IS NULL OR LOWER(a.province) = LOWER($5))
+       AND ($6::text IS NULL OR $6 = '' OR o.public_code ILIKE '%' || $6 || '%' OR o.customer_name ILIKE '%' || $6 || '%')
+),
+daily_tickets AS (
+    SELECT 
+        DATE(o.created_at) AS ticket_date,
+        COUNT(DISTINCT t.id) AS tickets
+    FROM orders o
+    JOIN tickets t ON t.order_id = o.id
+    WHERE o.status = 'PAID'
+      AND o.created_at >= $1
+      AND o.created_at <= $2
+    GROUP BY DATE(o.created_at)
+)
+SELECT 
+    TO_CHAR(d.order_date, 'DD/MM') AS date,
+    COALESCE(SUM(d.actual_revenue), 0) AS revenue,
+    COALESCE(dt.tickets, 0) AS tickets
+FROM daily_orders d
+LEFT JOIN daily_tickets dt ON dt.ticket_date = d.order_date
+GROUP BY d.order_date, dt.tickets
+ORDER BY d.order_date
+`
+	err = db.Raw(dailyQuery, from, to, cinemaID, movieID, province, search).Scan(&dailyMetrics).Error
+	if err != nil {
+		return nil, err
+	}
+
+	// 7. Occupancy Trends
 	var trends []OccupancyTrendItem
 	trendQuery := `
-    SELECT 
-        TO_CHAR(DATE(st.start_time), 'DD/MM') AS date,
-        COALESCE(AVG(
-            (SELECT COUNT(tt.id)::float FROM tickets tt WHERE tt.showtime_id = st.id AND tt.status IN ('BOOKED','USED')) /
-            (SELECT COUNT(sts.id) FROM showtime_seats sts WHERE sts.showtime_id = st.id)
-        ), 0) * 100 AS rate
-    FROM showtimes st
-    WHERE st.start_time >= $1 AND st.start_time <= $2
-      AND ($3::bigint IS NULL OR st.room_id IN (SELECT id FROM rooms WHERE cinema_id = $3))
-      AND ($4::bigint IS NULL OR st.movie_id = $4)
-    GROUP BY DATE(st.start_time)
-    ORDER BY DATE(st.start_time)
-    `
+SELECT 
+    TO_CHAR(DATE(st.start_time), 'DD/MM') AS date,
+    COALESCE(AVG(
+        (SELECT COUNT(tt.id)::float FROM tickets tt WHERE tt.showtime_id = st.id AND tt.status IN ('PAID','ISSUED','CHECKED_IN','EXPIRED')) /
+        (SELECT COUNT(sts.id) FROM showtime_seats sts WHERE sts.showtime_id = st.id)
+    ), 0) * 100 AS rate
+FROM showtimes st
+JOIN rooms r ON st.room_id = r.id
+JOIN cinemas cin ON r.cinema_id = cin.id
+LEFT JOIN addresses a ON cin.id = a.cinema_id
+WHERE st.start_time >= $1 AND st.start_time <= $2
+  AND ($3::bigint IS NULL OR cin.id = $3)
+  AND ($4::bigint IS NULL OR st.movie_id = $4)
+  AND ($5::text IS NULL OR LOWER(a.province) = LOWER($5))
+GROUP BY DATE(st.start_time)
+ORDER BY DATE(st.start_time)
+`
 	type TrendRow struct {
 		Date string  `gorm:"column:date"`
 		Rate float64 `gorm:"column:rate"`
 	}
 	var trendRows []TrendRow
-	err = db.Raw(trendQuery, from, to, cinemaID, movieID).Scan(&trendRows).Error
+	err = db.Raw(trendQuery, from, to, cinemaID, movieID, province).Scan(&trendRows).Error
 	if err != nil {
 		return nil, err
 	}
@@ -688,26 +976,32 @@ ORDER BY revenue DESC;
 		trends = append(trends, OccupancyTrendItem{Date: row.Date, Rate: row.Rate})
 	}
 
-	// 5. Đếm tổng (cho pagination, nếu áp dụng cho items)
+	// Summary
+	summary := &DashboardSummary{
+		TotalRevenue:       kpi.TotalRevenue,
+		TotalTickets:       kpi.TicketsSold,
+		AvgOccupancy:       kpi.OccupancyRate,
+		TotalCustomers:     kpi.UniqueCustomers,
+		PrevTotalRevenue:   prevKPI.TotalRevenue,
+		PrevTotalTickets:   prevKPI.TicketsSold,
+		PrevAvgOccupancy:   prevKPI.OccupancyRate,
+		PrevTotalCustomers: prevKPI.UniqueCustomers,
+		RevenueChangePct:   kpi.RevenueChange,
+		TicketChangePct:    kpi.TicketChange,
+		CustomerChangePct:  kpi.CustomerChange,
+		OccupancyChangePct: kpi.OccupancyChange,
+	}
 	countQuery := "SELECT COUNT(*) FROM movies m JOIN showtimes st ON m.id = st.movie_id JOIN tickets t ON st.id = t.showtime_id JOIN orders o ON t.order_id = o.id WHERE o.status = 'PAID' AND o.created_by = 0 AND st.start_time >= $1 AND st.start_time <= $2" // Ví dụ cho top movies
 	var total int
 	db.Raw(countQuery, from, to).Scan(&total)
-
-	// Summary
-	summary := &DashboardSummary{
-		TotalRevenue:   kpi.TotalRevenue,
-		TotalTickets:   kpi.TicketsSold,
-		AvgOccupancy:   kpi.OccupancyRate,
-		TotalCustomers: kpi.UniqueCustomers,
-	}
-
-	// Report tổng hợp
+	// Report
 	report := &DashboardReport{
-		Items:          make([]interface{}, 0), // Có thể append topMovies và revenueCinemas nếu cần flatten
 		Summary:        summary,
 		Trends:         trends,
 		TopMovies:      topMovies,
 		RevenueCinemas: revenueCinemas,
+		DailyMetrics:   dailyMetrics,
+		TicketByHours:  ticketByHours,
 		Pagination: &PaginationInfo{
 			CurrentPage: (offset / limit) + 1,
 			TotalPages:  (total + limit - 1) / limit,
@@ -717,7 +1011,6 @@ ORDER BY revenue DESC;
 			HasPrev:     offset > 0,
 		},
 	}
-	// Append items nếu cần (ví dụ: report.Items = append(report.Items, topMovies...) – nhưng vì khác type, dùng map hoặc riêng)
 
 	return report, nil
 }
