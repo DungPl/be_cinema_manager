@@ -460,7 +460,10 @@ func EditCinema(c *fiber.Ctx) error {
 	if cinemaInput.Description != nil {
 		cinema.Description = cinemaInput.Description
 	}
-	if err := tx.Preload("CinemaChain").Save(&cinema).Error; err != nil {
+	if cinemaInput.ChainId != nil {
+		cinema.ChainId = *cinemaInput.ChainId
+	}
+	if err := tx.Save(&cinema).Error; err != nil {
 		tx.Rollback()
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.ERROR_EDIT, err)
 	}

@@ -424,6 +424,22 @@ func EditCinema(key string) fiber.Handler {
 				return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.ERROR_INTERNAL_ERROR, fmt.Errorf("database query error: %v", err))
 			}
 		}
+		if input.ChainId != nil {
+			var chain model.CinemaChain
+			if err := database.DB.First(&chain, *input.ChainId).Error; err != nil {
+				if errors.Is(err, gorm.ErrRecordNotFound) {
+					return utils.ErrorResponseHaveKey(
+						c,
+						fiber.StatusBadRequest,
+						"Chuỗi rạp chiếu phim không tồn tại",
+						err,
+						"chainId",
+					)
+				}
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "DB error", err)
+			}
+		}
+
 		// Verify address if provided
 		var lat, lng float64
 		if input.Address != nil {

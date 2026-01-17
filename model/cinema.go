@@ -44,7 +44,7 @@ type EditCinemaInput struct {
 	Name        *string             `gorm:"not null" validate:"required" json:"name"`
 	Phone       *string             `json:"phone"`
 	Active      *bool               `gorm:"not null, default:true" json:"isActive"`
-	ChainId     uint                `form:"chainId" validate:"required"`
+	ChainId     *uint               `json:"chainId" `
 	Address     *CreateAddressInput `json:"address"`
 	Description *string             `json:"description"`
 }
