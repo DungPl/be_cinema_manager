@@ -55,6 +55,7 @@ func GetRoom(c *fiber.Ctx) error {
 func GetRoomsByCinemaId(c *fiber.Ctx) error {
 	param := c.Params("cinemaId")
 	id, err := strconv.Atoi(param)
+	status := c.Query("status")
 	cinemaId := uint(id)
 	accountInfo, isAdmin, isManager, _, _ := helper.GetInfoAccountFromToken(c)
 
@@ -71,16 +72,23 @@ func GetRoomsByCinemaId(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusForbidden, "Bạn không có quyền xem chi tiết phòng của rạp khác", errors.New("manager not assigned to this cinema"))
 		}
 	}
+	db := database.DB
+	query := db.
+		Where("cinema_id = ?", cinemaId)
+
+	if status != "" {
+		query = query.Where("status = ?", status)
+	}
 	var rooms []model.Room
-	err = database.DB.
+	err = query.
 		Preload("Cinema").
 		Preload("Cinema.Chain").
 		Preload("Seats").
 		Preload("Seats.SeatType").
 		Preload("Formats").
-		Where("cinema_id = ?", cinemaId).
 		Order("name ASC").
 		Find(&rooms).Error
+
 	if err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Failed to fetch rooms", err)
 	}

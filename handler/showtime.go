@@ -526,10 +526,15 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 		imaxLateCountPerDay[dateKey] = 0 // reset nếu cần, nhưng map sẽ tự tạo
 
 		for _, roomID := range input.RoomIDs {
+
 			var room model.Room
 			if err := tx.Preload("Formats").First(&room, roomID).Error; err != nil {
 				tx.Rollback()
 				return utils.ErrorResponse(c, 404, "Phòng không tồn tại", err)
+			}
+			if room.Status != "available" {
+				tx.Rollback()
+				return utils.ErrorResponse(c, 400, "Phòng đang bị khóa", nil)
 			}
 			if len(input.RoomIDs) > 6 {
 				return utils.ErrorResponse(c, 400, "Tối đa 6 phòng cho 1 phim", nil)

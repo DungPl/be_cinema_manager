@@ -446,7 +446,7 @@ func EditCinema(c *fiber.Ctx) error {
 
 	tx := db.Begin()
 	var cinema model.Cinema
-	tx.Preload("Chain").First(&cinema, cinemaId)
+	tx.First(&cinema, cinemaId)
 	if cinemaInput.Phone != nil {
 		cinema.Phone = *cinemaInput.Phone
 	}

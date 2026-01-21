@@ -500,7 +500,7 @@ func PurchaseSeats(c *fiber.Ctx) error {
 
 	if email != "" {
 		detailLink := fmt.Sprintf("http://localhost:5173/don-hang/%s", order.PublicCode)
-		cancelLink := fmt.Sprintf("https://yourdomain.com/api/v1/orders/cancel-by-code?orderCode=%s", order.PublicCode)
+		cancelLink := fmt.Sprintf("https://localhost:8002/don-hang/huy?orderCode=%s", order.PublicCode)
 
 		data := utils.OrderConfirmationData{
 			OrderCode:     order.PublicCode,
