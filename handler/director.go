@@ -116,7 +116,7 @@ func GetDirectorByMovieId(c *fiber.Ctx) error {
 	return c.Status(fiber.StatusOK).JSON(fiber.Map{
 		"movieId":  movie.ID,
 		"title":    movie.Title,
-		"director": movie.Director,
+		"director": movie.Directors,
 	})
 }
 

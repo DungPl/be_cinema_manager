@@ -118,7 +118,7 @@ func GetMovies(c *fiber.Ctx) error {
 	var movies []model.Movie
 	condition = utils.ApplyPagination(condition, filterInput.Limit, filterInput.Page)
 	condition.Preload("Formats").
-		Preload("Director").
+		Preload("Directors").
 		Preload("Actors").
 		Preload("Posters").
 		Preload("Trailers").
@@ -141,7 +141,7 @@ func GetMovieById(c *fiber.Ctx) error {
 	movieId := uint(movieId64)
 	db := database.DB
 	var movie model.Movie
-	db.Preload("Director").Preload("Actors").Preload("Posters").Preload("Trailers").Preload("AccountModerator").First(&movie, movieId)
+	db.Preload("Directors").Preload("Actors").Preload("Posters").Preload("Trailers").Preload("AccountModerator").First(&movie, movieId)
 	return utils.SuccessResponse(c, fiber.StatusOK, movie)
 }
 func CreateMovie(c *fiber.Ctx) error {
@@ -152,45 +152,6 @@ func CreateMovie(c *fiber.Ctx) error {
 	}
 	formats := c.Locals("formats").([]model.Format)
 	tx := db.Begin()
-	// Xử lý Director
-	// --- XỬ LÝ DIRECTOR ---
-	var directorId uint
-	if movieInput.DirectorId != nil {
-		var director model.Director
-		if err := tx.First(&director, movieInput.DirectorId).Error; err != nil {
-			tx.Rollback()
-			if errors.Is(err, gorm.ErrRecordNotFound) {
-				return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Đạo diễn không tồn tại", nil, "directorId")
-			}
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi DB", err)
-		}
-		directorId = director.ID
-	} else if movieInput.DirectorName != nil {
-		name := strings.TrimSpace(*movieInput.DirectorName)
-		if name == "" {
-			tx.Rollback()
-			return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Tên đạo diễn không được rỗng", nil, "directorName")
-		}
-
-		var director model.Director
-		if err := tx.Where("LOWER(name) = LOWER(?)", name).First(&director).Error; err == nil {
-			directorId = director.ID
-		} else if errors.Is(err, gorm.ErrRecordNotFound) {
-			director = model.Director{Name: name}
-			if err := tx.Create(&director).Error; err != nil {
-				tx.Rollback()
-				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi tạo đạo diễn", err)
-			}
-			directorId = director.ID
-		} else {
-			tx.Rollback()
-			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi truy vấn đạo diễn", err)
-		}
-	} else {
-		tx.Rollback()
-		return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Phải cung cấp directorId hoặc directorName", nil, "directorId")
-	}
-
 	// --- XỬ LÝ ACTORS ---
 	var actorIds []uint
 	seen := make(map[uint]bool) // tránh trùng
@@ -202,16 +163,72 @@ func CreateMovie(c *fiber.Ctx) error {
 			tx.Rollback()
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi kiểm tra diễn viên", err)
 		}
-		if len(actors) != len(movieInput.ActorIds) {
-			tx.Rollback()
-			return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Một số diễn viên không tồn tại", nil, "actorIds")
-		}
+		// if len(actors) != len(movieInput.ActorIds) {
+		// 	tx.Rollback()
+		// 	return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest,
+		// 		"Một hoặc nhiều diễn viên không tồn tại",
+		// 		errors.New("some actorIds not found"),
+		// 		"actorIds")
+		// }
 		for _, a := range actors {
 			if !seen[a.ID] {
 				actorIds = append(actorIds, a.ID)
 				seen[a.ID] = true
 			}
 		}
+	}
+	for _, name := range movieInput.ActorNames {
+		name = strings.TrimSpace(name)
+		if name == "" {
+			continue
+		}
+
+		var actor model.Actor
+		if err := tx.Where("LOWER(name) = LOWER(?)", name).First(&actor).Error; err == nil {
+			// Tồn tại → thêm ID
+			if !seen[actor.ID] {
+				actorIds = append(actorIds, actor.ID)
+				seen[actor.ID] = true
+			}
+		} else if errors.Is(err, gorm.ErrRecordNotFound) {
+			// Không tồn tại → tạo mới
+			actor = model.Actor{Name: name}
+			if err := tx.Create(&actor).Error; err != nil {
+				tx.Rollback()
+				return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi tạo diễn viên mới", err)
+			}
+			actorIds = append(actorIds, actor.ID)
+			seen[actor.ID] = true
+		} else {
+			tx.Rollback()
+			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi truy vấn diễn viên", err)
+		}
+	}
+	// --- XỬ LÝ DIRECTORS ---
+	var directorIds []uint
+	seenDirector := make(map[uint]bool)
+
+	// 1. DirectorIds
+	if len(movieInput.DirectorIds) > 0 {
+		var directors []model.Director
+		if err := tx.Where("id IN ?", movieInput.DirectorIds).Find(&directors).Error; err != nil {
+			tx.Rollback()
+			return utils.ErrorResponse(c, 500, "Lỗi kiểm tra đạo diễn", err)
+		}
+		// if len(directors) != len(movieInput.DirectorIds) {
+		// 	tx.Rollback()
+		// 	return utils.ErrorResponseHaveKey(c, 400, "Một số đạo diễn không tồn tại", nil, "directorIds")
+		// }
+		for _, d := range directors {
+			if !seenDirector[d.ID] {
+				directorIds = append(directorIds, d.ID)
+				seenDirector[d.ID] = true
+			}
+		}
+	}
+	if len(directorIds) == 0 {
+		tx.Rollback()
+		return utils.ErrorResponseHaveKey(c, 400, "Phải có ít nhất một đạo diễn", nil, "directors")
 	}
 
 	// 2. Từ ActorNames
@@ -244,16 +261,16 @@ func CreateMovie(c *fiber.Ctx) error {
 	accountId := dataInfo.AccountId
 
 	movie := model.Movie{
-		Genre:              movieInput.Genre,
-		Title:              movieInput.Title,
-		Description:        movieInput.Description,
-		Duration:           movieInput.Duration,
-		Country:            movieInput.Country,
-		DateRelease:        movieInput.DateRelease,
-		Language:           movieInput.Language,
-		DateSoon:           movieInput.DateSoon,
-		DateEnd:            movieInput.DateEnd,
-		DirectorId:         directorId,
+		Genre:       movieInput.Genre,
+		Title:       movieInput.Title,
+		Description: movieInput.Description,
+		Duration:    movieInput.Duration,
+		Country:     movieInput.Country,
+		DateRelease: movieInput.DateRelease,
+		Language:    movieInput.Language,
+		DateSoon:    movieInput.DateSoon,
+		DateEnd:     movieInput.DateEnd,
+
 		AgeRestriction:     movieInput.AgeRestriction,
 		AccountModeratorId: accountId,
 		Slug:               helper.GenerateUniquerateUniqueMoviSlug(tx, movieInput.Title),
@@ -298,7 +315,15 @@ func CreateMovie(c *fiber.Ctx) error {
 			return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi liên kết diễn viên", err)
 		}
 	}
-
+	for _, directorId := range directorIds {
+		if err := tx.Create(&model.MovieDirector{
+			MovieId:    movie.ID,
+			DirectorId: directorId,
+		}).Error; err != nil {
+			tx.Rollback()
+			return utils.ErrorResponse(c, 500, "Lỗi liên kết đạo diễn", err)
+		}
+	}
 	// --- COMMIT ---
 	if err := tx.Commit().Error; err != nil {
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi commit", err)
@@ -307,7 +332,7 @@ func CreateMovie(c *fiber.Ctx) error {
 	// --- LOAD LẠI VỚI RELATION ---
 	var createdMovie model.Movie
 	if err := database.DB.
-		Preload("Director").
+		Preload("Directors").
 		Preload("Actors").
 		Preload("AccountModerator").
 		First(&createdMovie, movie.ID).Error; err != nil {
@@ -327,43 +352,21 @@ func EditMovie(c *fiber.Ctx) error {
 	tx := db.Begin()
 	var movie model.Movie
 	tx.Preload("Director").Preload("Actors").Preload("Posters").Preload("Trailers").Preload("AccountModerator").First(&movie, movieId)
-	var directorId uint
-	if movieInput.DirectorId != nil {
-		var director model.Director
-		if err := tx.Where("id = ? ", *movieInput.DirectorId).First(&director).Error; err != nil {
-			if err == gorm.ErrRecordNotFound {
-				return fmt.Errorf("đạo diễn không tồn tại")
-			}
-			return err
-		}
-		directorId = director.ID
-	} else if movieInput.DirectorName != nil {
-		var director model.Director
-		if err := tx.Where("name = ? ", *movieInput.DirectorName).First(&director).Error; err == nil {
-			directorId = director.ID
-		} else if err == gorm.ErrRecordNotFound {
-			director = model.Director{Name: *movieInput.DirectorName}
-			if err := tx.Create(&director).Error; err != nil {
-				return err
-			}
-			directorId = director.ID
-		} else {
-			return err
-		}
-	}
+
 	var actorIds []uint
 	if movieInput.ActorIds != nil && len(*movieInput.ActorIds) > 0 {
 		var actors []model.Actor
 		if err := tx.Where("id IN ?", *movieInput.ActorIds).Find(&actors).Error; err != nil {
 			return err
 		}
-		if len(actors) != len(*movieInput.ActorIds) {
-			return fmt.Errorf("một hoặc nhiều diễn viên không tồn tại")
-		}
+		// if len(actors) != len(*movieInput.ActorIds) {
+		// 	return fmt.Errorf("một hoặc nhiều diễn viên không tồn tại")
+		// }
 		for _, actor := range actors {
 			actorIds = append(actorIds, actor.ID)
 		}
 	}
+
 	if movieInput.ActorNames != nil && len(*movieInput.ActorNames) > 0 {
 		for _, name := range *movieInput.ActorNames {
 			var actor model.Actor
@@ -380,6 +383,22 @@ func EditMovie(c *fiber.Ctx) error {
 			}
 		}
 	}
+	var directorIds []uint
+	seenDirector := make(map[uint]bool)
+
+	if movieInput.DirectorIds != nil {
+		var directors []model.Director
+		if err := tx.Where("id IN ?", *movieInput.DirectorIds).Find(&directors).Error; err != nil {
+			return err
+		}
+		for _, d := range directors {
+			if !seenDirector[d.ID] {
+				directorIds = append(directorIds, d.ID)
+				seenDirector[d.ID] = true
+			}
+		}
+	}
+
 	if len(formatIds) > 0 {
 		// Xóa cũ
 		if err := tx.Where("movie_id = ?", movie.ID).Delete(&model.MovieFormat{}).Error; err != nil {
@@ -428,7 +447,7 @@ func EditMovie(c *fiber.Ctx) error {
 	if movieInput.DateEnd != nil {
 		movie.DateEnd = movieInput.DateEnd
 	}
-	movie.DirectorId = directorId
+
 	movie.Slug = helper.GenerateUniquerateUniqueMoviSlug(tx, movie.Title)
 	if err := tx.Model(&model.Movie{}).Where("id = ?", movieId).Updates(movie).Error; err != nil {
 		return err
@@ -449,9 +468,22 @@ func EditMovie(c *fiber.Ctx) error {
 			return err
 		}
 	}
+
+	if err := tx.Where("movie_id = ?", movieId).Delete(&model.MovieDirector{}).Error; err != nil {
+		return err
+	}
+
+	for _, did := range directorIds {
+		if err := tx.Create(&model.MovieDirector{
+			MovieId:    movieId,
+			DirectorId: did,
+		}).Error; err != nil {
+			return err
+		}
+	}
 	var updatedMovie model.Movie
 	if err := tx.
-		Preload("Director").
+		Preload("Directors").
 		Preload("Actors").
 		Preload("Posters").
 		Preload("Trailers").

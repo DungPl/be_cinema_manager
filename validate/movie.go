@@ -38,16 +38,16 @@ func CreateMovie() fiber.Handler {
 		}
 
 		// // Kiểm tra Director tồn tại
-		var director model.Director
-		if input.DirectorId != nil {
-			if err := database.DB.First(&director, input.DirectorId).Error; err != nil {
-				if err == gorm.ErrRecordNotFound {
-					return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Đạo diễn không tồn tại", fmt.Errorf("directorId not found"), "directorId")
-				}
+		var directors []model.Director
+		if len(input.ActorIds) > 0 {
+			if err := database.DB.Where("id IN ? ", input.ActorIds).Find(&directors).Error; err != nil {
 				return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 					"error": fmt.Sprintf("Lỗi truy vấn cơ sở dữ liệu: %s", err.Error()),
 				})
 			}
+			// if len(directors) != len(input.DirectorIds) {
+			// 	return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Một hoặc nhiều diễn viên không tồn tại", fmt.Errorf("some actorIds not found"), "actorIds")
+			// }
 		}
 		// // Kiểm tra ActorIds tồn tại
 		var actors []model.Actor
@@ -57,9 +57,9 @@ func CreateMovie() fiber.Handler {
 					"error": fmt.Sprintf("Lỗi truy vấn cơ sở dữ liệu: %s", err.Error()),
 				})
 			}
-			if len(actors) != len(input.ActorIds) {
-				return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Một hoặc nhiều diễn viên không tồn tại", fmt.Errorf("some actorIds not found"), "actorIds")
-			}
+			// if len(actors) != len(input.ActorIds) {
+			// 	return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Một hoặc nhiều diễn viên không tồn tại", fmt.Errorf("some actorIds not found"), "actorIds")
+			// }
 		}
 		// Kiểm tra định dạng tồn tại
 		var formats []model.Format
