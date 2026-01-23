@@ -633,8 +633,9 @@ func DeleteRoom(c *fiber.Ctx) error {
 
 	// 2. Kiểm tra có ghế nào đang được đặt không (trong bảng booking hoặc seat tạm giữ)
 	var bookedSeats int64
-	if err := tx.Model(&model.Seat{}).
-		Where("room_id in  ? AND (is_booked = ? OR is_available = ?)", ids, true, false).
+	if err := tx.Model(&model.ShowtimeSeat{}).
+		Joins("JOIN seats ON seats.id = showtime_seats.seat_id").
+		Where("seats.room_id IN ? AND (showtime_seats.status = ? OR showtime_seats.status = ?)", ids, "HELD", "SOLD").
 		Count(&bookedSeats).Error; err != nil {
 		tx.Rollback()
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi kiểm tra ghế đã đặt", err)
@@ -656,7 +657,11 @@ func DeleteRoom(c *fiber.Ctx) error {
 		log.Printf("DeleteRoom: Failed to delete seats - roomId=%v, error=%v", ids, err)
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi xóa dữ liệu ghế", err)
 	}
-
+	if err := tx.Where("room_id IN ?", ids).Delete(&model.RoomFormat{}).Error; err != nil {
+		tx.Rollback()
+		log.Printf("DeleteRoom: Failed to delete room_formats - roomIds=%v, error=%v", ids, err)
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi xóa liên kết định dạng phòng", err)
+	}
 	// Xóa phòng (cuối cùng)
 	if err := tx.Where("id in  ?", ids).Delete(&model.Room{}).Error; err != nil {
 		tx.Rollback()
@@ -702,7 +707,10 @@ func DisableRoom(c *fiber.Ctx) error {
 		return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Không thể vô hiệu hóa phòng có lịch chiếu đang hoạt động", errors.New("active showtimes exist"), "ids")
 	}
 	var bookedSeats int64
-	if err := tx.Model(&model.Seat{}).Where("room_id = ? AND is_available = ?", roomId, false).Count(&bookedSeats).Error; err != nil {
+	if err := tx.Model(&model.ShowtimeSeat{}).
+		Joins("JOIN seats ON seats.id = showtime_seats.seat_id").
+		Where("seats.room_id IN ? AND (showtime_seats.status = ? OR showtime_seats.status = ?)", roomId, "HELD", "SOLD").
+		Count(&bookedSeats).Error; err != nil {
 		return err
 	}
 	if bookedSeats > 0 {
