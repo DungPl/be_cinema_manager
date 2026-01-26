@@ -87,12 +87,13 @@ type AutoGenerateScheduleInput struct {
 	Formats      []string `json:"formats" validate:"required,dive,oneof=2D 3D IMAX 4DX"`
 	LanguageType []string `gorm:"size:20" json:"languageType"`        // VI_SUB, VI_DUB, EN_SUB, EN_DUB
 	TimeSlots    []string `json:"timeSlots" validate:"required,dive"` // ["18:30", "20:45"]
-	IsVietnamese bool     `json:"isVietnamese"`                       // ưu tiên khung giờ vàng
+	IsVietnamese bool     `json:"isVietnamese"`
+	Price        float64  `json:"price"` // ưu tiên khung giờ vàng
 }
 type UpdateShowtimeInput struct {
 	MovieId   *uint      `json:"movieId" `
 	RoomId    *uint      `json:"roomId" `
-	StartTime *time.Time `json:"startTime" `
+	StartTime *time.Time `json:"start_time" `
 	EndTime   *time.Time `json:"endTime" `
 	Price     *float64   `json:"price"`
 }

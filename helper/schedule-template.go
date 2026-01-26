@@ -105,9 +105,9 @@ func BuildStartTime(date time.Time, slot string, loc *time.Location, format stri
 	startStr := fmt.Sprintf("%s %s", date.Format("2006-01-02"), slot)
 	startTime, _ := time.ParseInLocation("2006-01-02 15:04", startStr, loc)
 
-	if startTime.Hour() >= BreakStartHour && startTime.Hour() < BreakEndHour {
-		startTime = time.Date(date.Year(), date.Month(), date.Day(), BreakEndHour, 0, 0, 0, loc).Add(ExtraBreakTime)
-	}
+	// if startTime.Hour() >= BreakStartHour && startTime.Hour() < BreakEndHour {
+	// 	startTime = time.Date(date.Year(), date.Month(), date.Day(), BreakEndHour, 0, 0, 0, loc).Add(ExtraBreakTime)
+	// }
 
 	idx := IndexInArray(roomIDs, roomID)
 	offset := 15 * time.Minute
@@ -124,11 +124,38 @@ func HasConflict(tx *gorm.DB, roomID uint, start, end time.Time) bool {
 		Count(&count)
 	return count > 0
 }
+func HasInterRoomGapConflict(
+	tx *gorm.DB,
+	movieID uint,
+	roomID uint,
+	start time.Time,
+	gap time.Duration,
+) bool {
+	var count int64
 
-func HasNearbyConflict(tx *gorm.DB, movieID, roomID uint, start time.Time, gap time.Duration) bool {
+	tx.Model(&model.Showtime{}).
+		Where(`
+			movie_id = ?
+			AND room_id != ?
+			AND start_time < ?
+			AND (? - start_time) < ?
+		`,
+			movieID,
+			roomID,
+			start,
+			start,
+			gap,
+		).
+		Count(&count)
+
+	return count > 0
+}
+
+func HasNearbyConflict(tx *gorm.DB, cinemaID, movieID, roomID uint, start time.Time, gap time.Duration) bool {
 	var count int64
 	tx.Model(&model.Showtime{}).
-		Where("movie_id = ? AND room_id != ? AND ABS(EXTRACT(EPOCH FROM (start_time - ?)) / 60) < ?", movieID, roomID, start, int(gap.Minutes())).
+		Joins("JOIN rooms r ON r.id = showtimes.room_id").
+		Where("r.cinema_id= ? AND movie_id = ? AND room_id != ? AND ABS(EXTRACT(EPOCH FROM (start_time - ?)) / 60) < ?", cinemaID, movieID, roomID, start, int(gap.Minutes())).
 		Count(&count)
 	return count > 0
 }

@@ -116,7 +116,7 @@ func GetShowtime(c *fiber.Ctx) error {
 	if err := condition.
 		Preload("Movie").
 		Preload("Movie.Formats").
-		Preload("Movie.Director").
+		Preload("Movie.Directors").
 		Preload("Movie.Actors").
 		Preload("Room").
 		Preload("Room.Formats").
@@ -507,11 +507,31 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 	if tx.Error != nil {
 		return utils.ErrorResponse(c, 500, "Lỗi DB", tx.Error)
 	}
+	movieFormatsMap := make(map[string]bool)
+	for _, f := range movie.Formats {
+		movieFormatsMap[f.Name] = true // giả sử Format có field Name (string) như "IMAX", "2D", "3D",...
+	}
+
+	unsupported := []string{}
+	for _, requestedFormat := range input.Formats {
+		if !movieFormatsMap[requestedFormat] {
+			unsupported = append(unsupported, requestedFormat)
+		}
+	}
+
+	if len(unsupported) > 0 {
+		tx.Rollback()
+		msg := fmt.Sprintf("Phim không hỗ trợ định dạng: %s", strings.Join(unsupported, ", "))
+		return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest,
+			msg,
+			fmt.Errorf("unsupported formats: %v", unsupported),
+			"formats")
+	}
 	const (
 		MinGapBetweenRooms = 10 * time.Minute // cách nhau tối thiểu giữa hai phòng chiếu cùng phim
 		BreakStartHour     = 11
 		BreakEndHour       = 14
-		ExtraBreakTime     = 30 * time.Minute
+		ExtraBreakTime     = 10 * time.Minute
 		MaxShowtimesPerDay = 8
 	)
 	loc, _ := time.LoadLocation("Asia/Ho_Chi_Minh")
@@ -562,9 +582,6 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 
 				//specialFormats := map[string]bool{"4DX": true, "IMAX": true}
 				offset := time.Duration(config.OffsetMinutes) * time.Minute
-				// if specialFormats[format] {
-				// 	offset = 20 * time.Minute
-				// }
 
 				validSlots := helper.FilterSlotsByFormatAndTime(input.TimeSlots, format, movie.Duration, currentDate, loc)
 
@@ -581,9 +598,9 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 					}
 
 					// Tránh giờ nghỉ trưa
-					if startTime.Hour() >= BreakStartHour && startTime.Hour() < BreakEndHour {
-						startTime = time.Date(currentDate.Year(), currentDate.Month(), currentDate.Day(), BreakEndHour, 0, 0, 0, loc).Add(ExtraBreakTime)
-					}
+					// if startTime.Hour() >= BreakStartHour && startTime.Hour() < BreakEndHour {
+					// 	startTime = time.Date(currentDate.Year(), currentDate.Month(), currentDate.Day(), BreakEndHour, 0, 0, 0, loc).Add(ExtraBreakTime)
+					// }
 
 					// Offset theo thứ tự phòng
 					idx := helper.IndexInArray(input.RoomIDs, roomID)
@@ -616,13 +633,13 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 					}
 
 					// Kiểm tra khoảng cách giữa các phòng
-					if helper.HasNearbyConflict(tx, movie.ID, roomID, startTime, MinGapBetweenRooms) {
+					if helper.HasNearbyConflict(tx, room.CinemaId, movie.ID, roomID, startTime, MinGapBetweenRooms) {
 						skippedCount++
 						continue
 					}
 
 					// Tính giá
-					price := helper.CalculateDynamicPrice(startTime, format, currentDate, input.IsVietnamese)
+
 					if len(input.LanguageType) == 0 {
 						input.LanguageType = []string{"VI_SUB"}
 					}
@@ -631,7 +648,12 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 						if !validLang[lang] {
 							continue
 						}
-
+						var price float64
+						if input.Price > 0 {
+							price = float64(input.Price) // frontend override
+						} else {
+							price = helper.CalculateDynamicPrice(startTime, format, currentDate, input.IsVietnamese)
+						}
 						showtime := model.Showtime{
 							PublicCode:   "ST-" + utils.RandomString(6),
 							MovieId:      input.MovieID,
@@ -767,11 +789,11 @@ func EditShowtime(c *fiber.Ctx) error {
 
 	tx := db.Begin()
 	var showtime model.Showtime
-	if err := tx.First(&showtime, showtimeId).Error; err != nil {
+	if err := tx.Preload("Movie").First(&showtime, showtimeId).Error; err != nil {
 		tx.Rollback()
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Showtime not found", err)
 	}
-
+	//log.Printf("EditShowtime input: %+v", showtimeInput)
 	if showtimeInput.MovieId != nil {
 		showtime.MovieId = *showtimeInput.MovieId
 	}
@@ -780,10 +802,11 @@ func EditShowtime(c *fiber.Ctx) error {
 	}
 	if showtimeInput.StartTime != nil {
 		showtime.StartTime = *showtimeInput.StartTime
+		showtime.EndTime = showtime.StartTime.Add(
+			time.Duration(showtime.Movie.Duration) * time.Minute,
+		)
 	}
-	if showtimeInput.EndTime != nil {
-		showtime.EndTime = *showtimeInput.EndTime
-	}
+
 	if showtimeInput.Price != nil {
 		showtime.Price = *showtimeInput.Price
 	}
@@ -806,14 +829,14 @@ func DeleteShowtime(c *fiber.Ctx) error {
 	db := database.DB
 	tx := db.Begin()
 	// Xóa mềm lịch chiếu
+	if err := db.Where("showtime_id = ?", showtimeId).Delete(&model.ShowtimeSeat{}).Error; err != nil {
+		return utils.ErrorResponse(c, 500, "Không xóa được ghế của suất chiếu", err)
+	}
 	if err := tx.Where("id = ?", showtimeId).Delete(&model.Showtime{}).Error; err != nil {
 		tx.Rollback()
 		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 			"error": fmt.Sprintf("Không thể xóa lịch chiếu: %s", err.Error()),
 		})
-	}
-	if err := db.Where("showtime_id = ?", showtimeId).Delete(&model.ShowtimeSeat{}).Error; err != nil {
-		return utils.ErrorResponse(c, 500, "Không xóa được ghế của suất chiếu", err)
 	}
 
 	// Commit giao dịch

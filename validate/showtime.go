@@ -70,7 +70,7 @@ func EditShowtime(key string) fiber.Handler {
 		// Kiểm tra phòng và phim tồn tại
 		var room model.Room
 		if input.RoomId != nil {
-			if err := database.DB.Where("id = ?  AND status = ?", input.RoomId, "active").First(&room).Error; err != nil {
+			if err := database.DB.Where("id = ?  AND status = ?", input.RoomId, "available").First(&room).Error; err != nil {
 				return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Phòng chiếu không tồn tại hoặc không hoạt động", err, "roomId")
 			}
 			if isManager {
@@ -321,7 +321,7 @@ func AutoGenerateShowtimeSchedule() fiber.Handler {
 		}
 		// Lấy phim + duration
 		var movie model.Movie
-		if err := database.DB.First(&movie, input.MovieID).Error; err != nil {
+		if err := database.DB.Preload("Formats").First(&movie, input.MovieID).Error; err != nil {
 			return utils.ErrorResponse(c, 404, "Phim không tồn tại", err)
 		}
 		if movie.StatusMovie == "ENDED" || movie.IsAvailable == false {
