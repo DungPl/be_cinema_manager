@@ -315,7 +315,7 @@ func AutoGenerateShowtimeSchedule() fiber.Handler {
 				}
 				if !hasFormat {
 					return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest,
-						fmt.Sprintf("Phòng %d không hỗ trợ định dạng %s", roomID, format), nil, "formats")
+						fmt.Sprintf("Phòng %d không hỗ trợ định dạng %s", room.RoomNumber, format), nil, "formats")
 				}
 			}
 		}

@@ -789,29 +789,37 @@ func EditShowtime(c *fiber.Ctx) error {
 
 	tx := db.Begin()
 	var showtime model.Showtime
-	if err := tx.Preload("Movie").First(&showtime, showtimeId).Error; err != nil {
+	if err := tx.First(&showtime, showtimeId).Error; err != nil {
 		tx.Rollback()
 		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Showtime not found", err)
 	}
 	//log.Printf("EditShowtime input: %+v", showtimeInput)
+	//log.Printf("EditShowtime handler - input: %+v", showtimeInput)
 	if showtimeInput.MovieId != nil {
+		//log.Printf("Updating movieId từ %d thành %d", showtime.MovieId, *showtimeInput.MovieId)
 		showtime.MovieId = *showtimeInput.MovieId
+		var movie model.Movie
+		if err := tx.First(&movie, *showtimeInput.MovieId).Error; err == nil {
+			showtime.Movie = movie
+		}
 	}
 	if showtimeInput.RoomId != nil {
 		showtime.RoomId = *showtimeInput.RoomId
 	}
 	if showtimeInput.StartTime != nil {
 		showtime.StartTime = *showtimeInput.StartTime
-		showtime.EndTime = showtime.StartTime.Add(
-			time.Duration(showtime.Movie.Duration) * time.Minute,
-		)
+		if showtime.Movie.ID != 0 {
+			showtime.EndTime = showtime.StartTime.Add(
+				time.Duration(showtime.Movie.Duration) * time.Minute,
+			)
+		}
 	}
 
 	if showtimeInput.Price != nil {
 		showtime.Price = *showtimeInput.Price
 	}
 	showtime.PublicCode = "ST-" + utils.RandomString(6)
-	if err := tx.Preload("Movie").Preload("Room").Preload("Room.Cinema").Save(&showtime).Error; err != nil {
+	if err := tx.Save(&showtime).Error; err != nil {
 		tx.Rollback()
 		return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.ERROR_EDIT, err)
 	}

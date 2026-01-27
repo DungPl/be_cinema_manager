@@ -599,7 +599,7 @@ func GetMovieDetail(c *fiber.Ctx) error {
 	err := database.DB.
 		Preload("Posters").
 		Preload("Trailers").
-		Preload("Director").
+		Preload("Directors").
 		Preload("Actors").
 		Preload("Formats").
 		Where("slug = ?", slug).
