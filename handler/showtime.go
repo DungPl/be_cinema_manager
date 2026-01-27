@@ -148,10 +148,9 @@ func GetShowtime(c *fiber.Ctx) error {
 			Where("orders.showtime_id = ?", s.ID).
 			Scan(&actualRevenue)
 		var bookedRevenue float64
-		db.Model(&model.Ticket{}).
-			Joins("JOIN orders ON orders.id = tickets.order_id").
-			Where("tickets.showtime_id = ?", s.ID).
-			Select("COALESCE(SUM(tickets.price), 0)").
+		db.Model(&model.Order{}).
+			Select("COALESCE(SUM(orders.total_amount), 0)").
+			Where("orders.showtime_id = ?", s.ID).
 			Scan(&bookedRevenue)
 		fillRate := 0.0
 		if totalSeats > 0 {
