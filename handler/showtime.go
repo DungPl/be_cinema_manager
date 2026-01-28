@@ -119,6 +119,7 @@ func GetShowtime(c *fiber.Ctx) error {
 		Preload("Room").
 		Preload("Room.Formats").
 		Preload("Room.Cinema").
+		Preload("Room.Cinema.Addresses").
 		Order("showtimes.start_time ASC").
 		Find(&showtimes).Error; err != nil {
 		return utils.ErrorResponse(c, 500, "Không thể lấy dữ liệu", err)
@@ -126,30 +127,67 @@ func GetShowtime(c *fiber.Ctx) error {
 
 	// Response
 	var responses []model.ShowtimeResponse
+	showtimeIDs := make([]uint, len(showtimes))
+	for i, s := range showtimes {
+		showtimeIDs[i] = s.ID
+	}
 
+	// Batch query total seats & booked seats
+	var seatCounts []struct {
+		ShowtimeID  uint
+		TotalSeats  int64
+		BookedSeats int64
+	}
+	db.Raw(`
+    SELECT 
+        showtime_id,
+        COUNT(*) AS total_seats,
+        SUM(CASE WHEN status IN ('SOLD', 'BOOKED') THEN 1 ELSE 0 END) AS booked_seats
+    FROM showtime_seats
+    WHERE showtime_id IN ?
+    GROUP BY showtime_id
+`, showtimeIDs).Scan(&seatCounts)
+
+	// Tạo map để tra cứu nhanh
+	seatMap := make(map[uint]struct{ Total, Booked int64 })
+	for _, sc := range seatCounts {
+		seatMap[sc.ShowtimeID] = struct{ Total, Booked int64 }{sc.TotalSeats, sc.BookedSeats}
+	}
+
+	// Batch query revenue (actual + booked)
+	var revenues []struct {
+		ShowtimeID    uint
+		ActualRevenue float64
+		BookedRevenue float64
+	}
+	db.Raw(`
+    SELECT 
+        showtime_id,
+        COALESCE(SUM(actual_revenue), 0) AS actual_revenue,
+        COALESCE(SUM(total_amount), 0) AS booked_revenue
+    FROM orders
+    WHERE showtime_id IN ?
+    GROUP BY showtime_id
+`, showtimeIDs).Scan(&revenues)
+
+	// Map revenue
+	revenueMap := make(map[uint]struct{ Actual, Booked float64 })
+	for _, r := range revenues {
+		revenueMap[r.ShowtimeID] = struct{ Actual, Booked float64 }{r.ActualRevenue, r.BookedRevenue}
+	}
+
+	// Cache Redis (nếu cần realtime cao hơn, có thể bỏ cache và dùng batch như trên)
+	//redisClient := database.Redis // giả sử anh có Redis client
 	for _, s := range showtimes {
-		var totalSeats int64
-		db.Model(&model.ShowtimeSeat{}).
-			Where("showtime_id = ?", s.ID).
-			Count(&totalSeats)
+		// Nếu Redis miss → dùng batch result
+		totalSeats := seatMap[s.ID].Total
+		bookedSeats := seatMap[s.ID].Booked
 
-		var bookedSeats int64
-		db.Model(&model.ShowtimeSeat{}).
-			Where("showtime_id = ? AND status IN ?",
-				s.ID, []string{"SOLD", "BOOKED"}).
-			Count(&bookedSeats)
+		// ... revenue
+		actualRevenue := revenueMap[s.ID].Actual
+		bookedRevenue := revenueMap[s.ID].Booked
 
-		var actualRevenue float64
-		db.Model(&model.Order{}).
-			Select("COALESCE(SUM(orders.actual_revenue), 0)").
-			Where("orders.showtime_id = ?", s.ID).
-			Scan(&actualRevenue)
-		var bookedRevenue float64
-		db.Model(&model.Order{}).
-			Select("COALESCE(SUM(orders.total_amount), 0)").
-			Where("orders.showtime_id = ?", s.ID).
-			Scan(&bookedRevenue)
-		fillRate := 0.0
+		fillRate := float64(0)
 		if totalSeats > 0 {
 			fillRate = float64(bookedSeats) / float64(totalSeats) * 100
 		}
@@ -166,7 +204,7 @@ func GetShowtime(c *fiber.Ctx) error {
 			BookedSeats:    bookedSeats,
 			TotalSeats:     totalSeats,
 			LanguageType:   string(s.LanguageType),
-			BookedRevenue:  bookedRevenue, // hoặc tính chính xác từ ticket.price
+			BookedRevenue:  bookedRevenue,
 			ActualRevenue:  actualRevenue,
 			RefundedAmount: float64(bookedSeats)*s.Price - actualRevenue,
 		})
