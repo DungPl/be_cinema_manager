@@ -116,12 +116,9 @@ func GetShowtime(c *fiber.Ctx) error {
 	if err := condition.
 		Preload("Movie").
 		Preload("Movie.Formats").
-		Preload("Movie.Directors").
-		Preload("Movie.Actors").
 		Preload("Room").
 		Preload("Room.Formats").
 		Preload("Room.Cinema").
-		Preload("Room.Cinema.Addresses").
 		Order("showtimes.start_time ASC").
 		Find(&showtimes).Error; err != nil {
 		return utils.ErrorResponse(c, 500, "Không thể lấy dữ liệu", err)

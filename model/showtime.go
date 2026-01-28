@@ -35,7 +35,7 @@ type ShowtimeSeat struct {
 	SeatRow    string     `json:"seatRow"`
 	SeatNumber int        `json:"seatNumber"`
 	SeatTypeId uint       `json:"seatTypeId"`
-	Status     string     `json:"status"`
+	Status     string     `gorm:"uiniqueIndex" json:"status"`
 	ExpiredAt  *time.Time `json:"expiredAt"`
 	HeldBy     string     `json:"heldBy"`
 	Showtime   Showtime   `json:"Showtime"`

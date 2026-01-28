@@ -87,7 +87,7 @@ func EditShowtime(key string) fiber.Handler {
 		}
 		var movie model.Movie
 		if input.MovieId != nil {
-			if err := database.DB.Where("id = ?  AND status_movie = ?", input.MovieId, "NOW_SHOWING").First(&movie).Error; err != nil {
+			if err := database.DB.Where("id = ?  AND (status_movie = ? OR status_movie = ?) ", input.MovieId, "NOW_SHOWING", "COMING_SOON").First(&movie).Error; err != nil {
 				return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Phim không tồn tại hoặc không đang chiếu", err, "movieId")
 			}
 		}
