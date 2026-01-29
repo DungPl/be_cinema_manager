@@ -6,8 +6,6 @@ import (
 	"cinema_manager/helper"
 	"cinema_manager/model"
 	"cinema_manager/utils"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -18,8 +16,10 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 	"github.com/jinzhu/copier"
 	"github.com/jordan-wright/email"
+	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -148,6 +148,22 @@ func CustomerLogin(c *fiber.Ctx) error {
 		AccessToken:  token,
 		RefreshToken: refreshToken,
 	}
+	c.Cookie(&fiber.Cookie{
+		Name:     "access_token",
+		Value:    token,
+		HTTPOnly: true,
+		SameSite: "None",
+		Secure:   true, // 🔥 BẮT BUỘC
+		Path:     "/",
+	})
+	c.Cookie(&fiber.Cookie{
+		Name:     "refresh_token",
+		Value:    refreshToken,
+		HTTPOnly: true,
+		SameSite: "None",
+		Secure:   false,
+		Path:     "/",
+	})
 	//log.Println("CLAIMS:", tokenClaim)
 	return utils.SuccessResponse(c, fiber.StatusOK, tokenData)
 }
@@ -188,102 +204,155 @@ func EditCustomer(c *fiber.Ctx) error {
 }
 func ForgotPassword(c *fiber.Ctx) error {
 	db := database.DB
-	EmailInput, ok := c.Locals("EmailForgotPassword").(model.ForgotPasswordRequest)
-	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.ERROR_PARSE_DATA_TO_LOCALS, errors.New("PARSE DATA TO LOCALS FAIL"))
-	}
+	input := c.Locals("EmailForgotPassword").(model.ForgotPasswordRequest)
 
 	var customer model.Customer
-	if err := db.Where("email = ?", EmailInput.Email).First(&customer).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Không tìm thấy khách hàng"})
-	}
-	// Tạo token khôi phục
-	tokenBytes := make([]byte, 16)
-	if _, err := rand.Read(tokenBytes); err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Không thể tạo token"})
-	}
-	token := hex.EncodeToString(tokenBytes)
+	db.Where("email = ?", input.Email).First(&customer)
 
-	// Lưu token vào cơ sở dữ liệu
+	// ⚠️ Không tiết lộ email có tồn tại hay không
+	if customer.ID == 0 {
+		return c.JSON(fiber.Map{
+			"message": "Nếu email tồn tại, liên kết khôi phục đã được gửi",
+		})
+	}
+
+	// 🔥 Xóa token cũ
+	db.Where("customer_id = ? AND used = false", customer.ID).
+		Delete(&model.PasswordResetToken{})
+
+	// 🔐 Tạo token
+	rawToken := uuid.NewString()
+	tokenHash, _ := bcrypt.GenerateFromPassword([]byte(rawToken), bcrypt.DefaultCost)
+
 	resetToken := model.PasswordResetToken{
-		CustomerId: customer.ID,
-		Token:      token,
-		ExpiresAt:  time.Now().Add(1 * time.Hour), // Hết hạn sau 1 giờ
-	}
-	if err := db.Create(&resetToken).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Không thể lưu token"})
+		CustomerID: customer.ID,
+		TokenHash:  string(tokenHash),
+		ExpiresAt:  time.Now().Add(1 * time.Hour),
 	}
 
-	// Gửi email với liên kết khôi phục
-	resetLink := fmt.Sprintf("http://your-app.com/reset-password?token=%s", token)
+	db.Create(&resetToken)
+
+	resetLink := fmt.Sprintf(
+		"%s/reset-password?token=%s",
+		os.Getenv("FRONTEND_URL"),
+		rawToken,
+	)
+
+	// 📧 Gửi email
 	e := email.NewEmail()
-	e.From = "your-app@example.com"
-	e.To = []string{EmailInput.Email}
+	e.From = os.Getenv("EMAIL_FROM")
+	e.To = []string{input.Email}
 	e.Subject = "Khôi phục mật khẩu"
-	e.Text = []byte(fmt.Sprintf("Nhấp vào liên kết để đặt lại mật khẩu: %s", resetLink))
-	err := e.Send("smtp.gmail.com:587", smtp.PlainAuth("", "your-email@gmail.com", "your-app-password", "smtp.gmail.com"))
-	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Không thể gửi email"})
-	}
+	e.Text = []byte("Nhấp vào link để đặt lại mật khẩu:\n" + resetLink)
 
-	return c.JSON(fiber.Map{"message": "Liên kết khôi phục đã được gửi tới email"})
+	e.Send(
+		os.Getenv("SMTP_HOST"),
+		smtp.PlainAuth(
+			"",
+			os.Getenv("SMTP_USER"),
+			os.Getenv("SMTP_PASS"),
+			os.Getenv("SMTP_HOST"),
+		),
+	)
+
+	return c.JSON(fiber.Map{
+		"message": "Nếu email tồn tại, liên kết khôi phục đã được gửi",
+	})
 }
+
 func ResetPassword(c *fiber.Ctx) error {
 	db := database.DB
-	ResetPassword, ok := c.Locals("ResetPassword").(model.ResetPasswordRequest)
-	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.ERROR_PARSE_DATA_TO_LOCALS, errors.New("PARSE DATA TO LOCALS FAIL"))
-	}
-	// Kiểm tra token
-	var resetToken model.PasswordResetToken
-	if err := db.Where("token = ? AND expires_at > ?", ResetPassword.Token, time.Now()).First(&resetToken).Error; err != nil {
-		return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "Token không hợp lệ hoặc đã hết hạn"})
+	var input model.ResetPasswordRequest
+	c.BodyParser(&input)
+
+	if input.NewPassword != input.RepeatPassword {
+		return utils.ErrorResponseHaveKey(
+			c, fiber.StatusBadRequest,
+			"Mật khẩu xác nhận không khớp",
+			nil, "repeatPassword",
+		)
 	}
 
-	// Tìm khách hàng
+	var tokens []model.PasswordResetToken
+	db.Where(
+		"expires_at > ? AND used = false",
+		time.Now(),
+	).Find(&tokens)
+
+	var matchedToken *model.PasswordResetToken
+	for _, t := range tokens {
+		if bcrypt.CompareHashAndPassword(
+			[]byte(t.TokenHash),
+			[]byte(input.Token),
+		) == nil {
+			matchedToken = &t
+			break
+		}
+	}
+
+	if matchedToken == nil {
+		return utils.ErrorResponse(
+			c, fiber.StatusBadRequest,
+			"Token không hợp lệ hoặc đã hết hạn",
+			nil,
+		)
+	}
+
 	var customer model.Customer
-	if err := db.First(&customer, resetToken.CustomerId).Error; err != nil {
-		return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": "Không tìm thấy khách hàng"})
-	}
+	db.First(&customer, matchedToken.CustomerID)
 
-	// Băm mật khẩu mới
+	passwordHash, _ := helper.HashPassword(input.NewPassword)
+	customer.Password = passwordHash
 
-	hash, err := helper.HashPassword(ResetPassword.NewPassword)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.CAN_NOT_HASH_PASSWORD, err)
-	}
-
-	// Cập nhật mật khẩu
-	customer.Password = hash
-	if err := db.Save(&customer).Error; err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": "Không thể cập nhật mật khẩu"})
-	}
-	db.Delete(&resetToken)
-
-	return c.JSON(fiber.Map{"message": "Đặt lại mật khẩu thành công"})
-}
-func ChangePasswordCustomer(c *fiber.Ctx) error {
-	db := database.DB
-	changePasswordInput, ok := c.Locals("inputChangePasswordCustomer").(model.CustomerChangePassword)
-	if !ok {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.ERROR_PARSE_DATA_TO_LOCALS, errors.New("PARSE DATA TO LOCALS FAIL"))
-	}
-	customerInfo, _ := helper.GetInfoCustomerFromToken(c)
-	customerId := customerInfo.AccountId
-	var customer model.Customer
-	db.First(&customer, customerId)
-	if !helper.CheckPasswordHash(changePasswordInput.CurrentPassword, customer.Password) {
-		return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, constants.INVALID_PASSWORD, errors.New("currentPassword invalid"), "currentPassword")
-	}
-	newPasswordHash, err := helper.HashPassword(changePasswordInput.NewPassword)
-	if err != nil {
-		return utils.ErrorResponse(c, fiber.StatusInternalServerError, constants.CAN_NOT_HASH_PASSWORD, err)
-	}
-	customer.Password = newPasswordHash
 	db.Save(&customer)
 
-	return utils.SuccessResponse(c, fiber.StatusOK, customer)
+	matchedToken.Used = true
+	db.Save(matchedToken)
+
+	return utils.SuccessResponse(c, fiber.StatusOK, "Đặt lại mật khẩu thành công")
 }
+
+func ChangePasswordCustomer(c *fiber.Ctx) error {
+	db := database.DB
+
+	customer, ok := c.Locals("customer").(*model.Customer)
+	if !ok || customer == nil {
+		return utils.ErrorResponse(
+			c,
+			fiber.StatusUnauthorized,
+			"Chưa đăng nhập",
+			nil,
+		)
+	}
+
+	changePasswordInput := c.Locals("inputChangePasswordCustomer").(model.CustomerChangePassword)
+
+	if !helper.CheckPasswordHash(changePasswordInput.CurrentPassword, customer.Password) {
+		return utils.ErrorResponseHaveKey(
+			c,
+			fiber.StatusBadRequest,
+			constants.INVALID_PASSWORD,
+			errors.New("currentPassword invalid"),
+			"currentPassword",
+		)
+	}
+
+	newPasswordHash, err := helper.HashPassword(changePasswordInput.NewPassword)
+	if err != nil {
+		return utils.ErrorResponse(
+			c,
+			fiber.StatusInternalServerError,
+			constants.CAN_NOT_HASH_PASSWORD,
+			err,
+		)
+	}
+
+	customer.Password = newPasswordHash
+	db.Save(customer)
+
+	return utils.SuccessResponse(c, fiber.StatusOK, nil)
+}
+
 func GetCurrentCustomer(c *fiber.Ctx) error {
 	// Ưu tiên dùng customer từ Locals (nếu middleware đã query)
 	if customer, ok := c.Locals("customer").(*model.Customer); ok && customer != nil {

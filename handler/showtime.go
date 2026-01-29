@@ -564,7 +564,12 @@ func GetShowtimeSeatMap(c *fiber.Ctx) error {
 
 		seatMap = append(seatMap, item)
 	}
-
+	sort.Slice(seatMap, func(i, j int) bool {
+		if seatMap[i].Row != seatMap[j].Row {
+			return seatMap[i].Row < seatMap[j].Row
+		}
+		return seatMap[i].Column < seatMap[j].Column
+	})
 	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
 		"showtime_id": showtimeID,
 		"seats":       seatMap,

@@ -194,7 +194,7 @@ func SetupRoutes(app *fiber.App) {
 	khachhang.Post("/login", handler.CustomerLogin)
 	khachhang.Get("/me", middleware.OptionalJWT(), middleware.OptionalAuth(), handler.GetCurrentCustomer)
 	khachhang.Post("/register", validate.RegisterCustomer(), handler.RegisterCustomer)
-	khachhang.Post("/change-password", middleware.OptionalJWT(), middleware.OptionalAuth(), validate.ChangePasswordCustomer(), handler.ChangePasswordCustomer)
+	khachhang.Post("/change-password", middleware.OptionalJWT(), middleware.RequireAuth(), middleware.OptionalAuth(), validate.ChangePasswordCustomer(), handler.ChangePasswordCustomer)
 	khachhang.Post("/forgot-password", middleware.OptionalJWT(), middleware.OptionalAuth(), validate.ForgetPassword(), handler.ForgotPassword)
 	khachhang.Post("/reset-password", middleware.OptionalJWT(), middleware.OptionalAuth(), validate.RestPassword(), handler.ResetPassword)
 }

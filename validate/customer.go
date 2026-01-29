@@ -129,12 +129,7 @@ func ChangePasswordCustomer() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 
 		var input model.CustomerChangePassword
-		if input.CurrentPassword == input.NewPassword {
-			return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Mật khẩu mới không được trùng mật khẩu hiện tại", errors.New("newPassword invalid"), "newPassword")
-		}
-		if input.NewPassword != input.RepeatPassword {
-			return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Mật khẩu xác nhận không trùng khớp", errors.New("repeatPassword invalid"), "repeatPassword")
-		}
+
 		// Parse JSON từ request body vào struct
 		if err := c.BodyParser(&input); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -148,7 +143,12 @@ func ChangePasswordCustomer() fiber.Handler {
 				"error": err.Error(),
 			})
 		}
-
+		if input.CurrentPassword == input.NewPassword {
+			return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Mật khẩu mới không được trùng mật khẩu hiện tại", errors.New("newPassword invalid"), "newPassword")
+		}
+		if input.NewPassword != input.RepeatPassword {
+			return utils.ErrorResponseHaveKey(c, fiber.StatusBadRequest, "Mật khẩu xác nhận không trùng khớp", errors.New("repeatPassword invalid"), "repeatPassword")
+		}
 		// Save input to context locals
 		c.Locals("inputChangePasswordCustomer", input)
 
@@ -159,7 +159,7 @@ func ForgetPassword() fiber.Handler {
 	return func(c *fiber.Ctx) error {
 
 		var input model.ForgotPasswordRequest
-		if err := c.BodyParser(input); err != nil {
+		if err := c.BodyParser(&input); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
 				"error": fmt.Sprintf("Invalid input %s", err.Error()),
 			})

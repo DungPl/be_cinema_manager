@@ -46,16 +46,18 @@ type FilterCustomer struct {
 	Active      *bool  `json:"active"`
 }
 type ForgotPasswordRequest struct {
-	Email string `json:"email" validate:"required,email"`
+	Email string `json:"email" validate:"email"`
 }
 type PasswordResetToken struct {
-	DTO
-	CustomerId uint      `gorm:"not null" json:"customerId"`
-	Token      string    `gorm:"type:varchar(255);not null;unique" json:"token"`
-	ExpiresAt  time.Time `gorm:"not null" json:"expiresAt"`
-	Customer   Customer  `gorm:"foreignKey:CustomerId" json:"customer"`
+	ID         uint   `gorm:"primaryKey"`
+	CustomerID uint   `gorm:"index"`
+	TokenHash  string `gorm:"uniqueIndex"`
+	ExpiresAt  time.Time
+	Used       bool `gorm:"default:false"`
+	CreatedAt  time.Time
 }
 type ResetPasswordRequest struct {
-	Token       string `json:"token" validate:"required"`
-	NewPassword string `json:"newPassword" validate:"required,min=8"`
+	Token          string `json:"token" validate:"required"`
+	NewPassword    string `json:"newPassword" validate:"required,min=8"`
+	RepeatPassword string `json:"repeatPassword"`
 }

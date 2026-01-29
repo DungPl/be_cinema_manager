@@ -45,19 +45,58 @@ func Protected() fiber.Handler {
 		return c.Next()
 	}
 }
+
+// func OptionalJWT() fiber.Handler {
+// 	return func(c *fiber.Ctx) error {
+// 		authHeader := c.Get("Authorization")
+// 		//log.Printf("Authorization header: %s", authHeader)
+
+// 		if authHeader == "" {
+// 			//log.Println("No Authorization header")
+// 			c.Locals("user", nil)
+// 			return c.Next()
+// 		}
+
+// 		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
+// 		//log.Printf("Token string: %s", tokenString)
+
+// 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
+// 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+// 				return nil, errors.New("unexpected signing method")
+// 			}
+// 			return []byte(os.Getenv("JWT_SECRET")), nil
+// 		})
+
+// 		if err != nil || !token.Valid {
+// 			//log.Printf("Token invalid: %v", err)
+// 			c.Locals("user", nil)
+// 			return c.Next()
+// 		}
+
+//			//log.Println("Token parsed successfully")
+//			c.Locals("user", token)
+//			return c.Next()
+//		}
+//	}
 func OptionalJWT() fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		authHeader := c.Get("Authorization")
-		//log.Printf("Authorization header: %s", authHeader)
+		var tokenString string
 
-		if authHeader == "" {
-			//log.Println("No Authorization header")
+		// 1️⃣ Ưu tiên Authorization header
+		authHeader := c.Get("Authorization")
+		if strings.HasPrefix(authHeader, "Bearer ") {
+			tokenString = strings.TrimPrefix(authHeader, "Bearer ")
+		}
+
+		// 2️⃣ Fallback: lấy từ cookie (browser)
+		if tokenString == "" {
+			tokenString = c.Cookies("access_token")
+		}
+
+		if tokenString == "" {
 			c.Locals("user", nil)
 			return c.Next()
 		}
-
-		tokenString := strings.TrimPrefix(authHeader, "Bearer ")
-		//log.Printf("Token string: %s", tokenString)
 
 		token, err := jwt.Parse(tokenString, func(token *jwt.Token) (interface{}, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
@@ -67,13 +106,25 @@ func OptionalJWT() fiber.Handler {
 		})
 
 		if err != nil || !token.Valid {
-			//log.Printf("Token invalid: %v", err)
 			c.Locals("user", nil)
 			return c.Next()
 		}
 
-		//log.Println("Token parsed successfully")
 		c.Locals("user", token)
+		return c.Next()
+	}
+}
+func RequireAuth() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		u := c.Locals("user")
+		if u == nil {
+			return utils.ErrorResponse(
+				c,
+				fiber.StatusUnauthorized,
+				"Chưa đăng nhập",
+				nil,
+			)
+		}
 		return c.Next()
 	}
 }
