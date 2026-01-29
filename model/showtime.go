@@ -36,11 +36,12 @@ type ShowtimeSeat struct {
 	SeatNumber int        `json:"seatNumber"`
 	SeatTypeId uint       `json:"seatTypeId"`
 	Status     string     `gorm:"uiniqueIndex" json:"status"`
-	ExpiredAt  *time.Time `json:"expiredAt"`
+	ExpiredAt  *time.Time `gorm:"uiniqueIndex" json:"expiredAt"`
 	HeldBy     string     `json:"heldBy"`
 	Showtime   Showtime   `json:"Showtime"`
 	SeatType   SeatType   ` json:"SeatType"`
 	Seat       Seat       `json:"Seat"`
+	Ticket     *Ticket    `gorm:"foreignKey:ShowtimeSeatId"`
 }
 type ShowtimeResponse struct {
 	DTO
@@ -85,7 +86,7 @@ type AutoGenerateScheduleInput struct {
 	StartDate    string   `json:"startDate" validate:"required"` // YYYY-MM-DD
 	EndDate      string   `json:"endDate" validate:"required"`
 	Formats      []string `json:"formats" validate:"required,dive,oneof=2D 3D IMAX 4DX"`
-	LanguageType []string `gorm:"size:20" json:"languageType"`        // VI_SUB, VI_DUB, EN_SUB, EN_DUB
+	LanguageType string   `gorm:"size:20" json:"languageType"`        // VI_SUB, VI_DUB, EN_SUB, EN_DUB
 	TimeSlots    []string `json:"timeSlots" validate:"required,dive"` // ["18:30", "20:45"]
 	IsVietnamese bool     `json:"isVietnamese"`
 	Price        float64  `json:"price"` // ưu tiên khung giờ vàng

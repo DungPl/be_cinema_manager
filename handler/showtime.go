@@ -492,6 +492,85 @@ func CreateShowtimeBatch(c *fiber.Ctx) error {
 	})
 
 }
+func GetShowtimeSeatMap(c *fiber.Ctx) error {
+	showtimeID, err := c.ParamsInt("id")
+	if err != nil {
+		return utils.ErrorResponse(c, fiber.StatusBadRequest, "Invalid showtime ID", err)
+	}
+
+	db := database.DB
+
+	var showtime model.Showtime
+	if err := db.First(&showtime, showtimeID).Error; err != nil {
+		return utils.ErrorResponse(c, fiber.StatusNotFound, "Suất chiếu không tồn tại", err)
+	}
+
+	var seats []model.ShowtimeSeat
+	if err := db.
+		Preload("Seat").
+		Preload("Seat.SeatType").
+		Preload("Ticket").
+		Preload("Ticket.Order").
+		Where("showtime_id = ?", showtimeID).
+		Find(&seats).Error; err != nil {
+
+		return utils.ErrorResponse(c, fiber.StatusInternalServerError, "Lỗi lấy sơ đồ ghế", err)
+	}
+
+	type SeatMapItem struct {
+		ID        uint    `json:"id"`
+		Row       string  `json:"row"`
+		Column    int     `json:"column"`
+		Label     string  `json:"label"`
+		Type      string  `json:"type"`
+		Status    string  `json:"status"`
+		HeldBy    string  `json:"heldBy,omitempty"`
+		Customer  *string `json:"customer,omitempty"`
+		Phone     *string `json:"phone,omitempty"`
+		Email     *string `json:"email,omitempty"`
+		Price     float64 `json:"price"`
+		ExpiredAt *string `json:"expiredAt,omitempty"`
+	}
+
+	seatMap := make([]SeatMapItem, 0, len(seats))
+
+	for _, s := range seats {
+		item := SeatMapItem{
+			ID:     s.ID,
+			Row:    s.Seat.Row,
+			Column: s.Seat.Column,
+			Label:  fmt.Sprintf("%s%d", s.Seat.Row, s.Seat.Column),
+			Type:   s.Seat.SeatType.Type,
+			Status: s.Status,
+			Price:  showtime.Price * s.Seat.SeatType.PriceModifier,
+		}
+
+		// HELD
+		if s.Status == "HELD" {
+			item.HeldBy = s.HeldBy
+			if s.ExpiredAt != nil {
+				str := s.ExpiredAt.Format("2006-01-02 15:04")
+				item.ExpiredAt = &str
+			}
+		}
+
+		// BOOKED / SOLD
+		if s.Ticket != nil && s.Ticket.OrderId != 0 {
+			order := s.Ticket.Order
+			item.Customer = &order.CustomerName
+			item.Phone = &order.Phone
+			item.Email = &order.Email
+		}
+
+		seatMap = append(seatMap, item)
+	}
+
+	return utils.SuccessResponse(c, fiber.StatusOK, fiber.Map{
+		"showtime_id": showtimeID,
+		"seats":       seatMap,
+		"total_seats": len(seatMap),
+	})
+}
 
 type LanguageType string
 
@@ -526,17 +605,17 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 		}
 	}
 	db := database.DB
-	if len(input.LanguageType) == 0 {
-		input.LanguageType = []string{string(LangViSub)}
-	}
+	// if len(input.LanguageType) == 0 {
+	// 	input.LanguageType = string(LangViSub)
+	// }
 
 	// Validate language
-	validLang := map[string]bool{
-		string(LangViSub): true,
-		string(LangViDub): true,
-		string(LangEnSub): true,
-		string(LangEnDub): true,
-	}
+	// validLang := map[string]bool{
+	// 	string(LangViSub): true,
+	// 	string(LangViDub): true,
+	// 	string(LangEnSub): true,
+	// 	string(LangEnDub): true,
+	// }
 	tx := db.Begin()
 	if tx.Error != nil {
 		return utils.ErrorResponse(c, 500, "Lỗi DB", tx.Error)
@@ -674,14 +753,14 @@ func AutoGenerateShowtimeSchedule(c *fiber.Ctx) error {
 
 					// Tính giá
 
-					if len(input.LanguageType) == 0 {
-						input.LanguageType = []string{"VI_SUB"}
-					}
+					// if len(input.LanguageType) == 0 {
+					// 	input.LanguageType = []string{"VI_SUB"}
+					// }
 					for _, lang := range input.LanguageType {
 
-						if !validLang[lang] {
-							continue
-						}
+						// if !validLang[lang] {
+						// 	continue
+						// }
 						var price float64
 						if input.Price > 0 {
 							price = float64(input.Price) // frontend override

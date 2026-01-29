@@ -129,7 +129,7 @@ func SetupRoutes(app *fiber.App) {
 	showtime.Get("/:cinemaId", middleware.Protected(), handler.GetShowtimeByCinemaIdAndDate)
 	showtime.Get("/:showtimeId", middleware.Protected(), validate.GetShowtimeById("showtimeId"), handler.GetShowtimeById)
 	showtime.Get("/:id/tickets", middleware.Protected(), handler.GetShowtimeTicket)
-	showtime.Get("/:id/seats", middleware.Protected(), handler.GetShowtimeSeat)
+	showtime.Get("/:id/seats", middleware.Protected(), handler.GetShowtimeSeatMap)
 	showtime.Post("/", middleware.Protected(), validate.CreateShowtimeBatch(), handler.CreateShowtimeBatch)
 	showtime.Post("/auto-generate", middleware.Protected(), validate.AutoGenerateShowtimeSchedule(), handler.AutoGenerateShowtimeSchedule)
 	showtime.Put("/:showtimeId", middleware.Protected(), validate.EditShowtime("showtimeId"), handler.EditShowtime)

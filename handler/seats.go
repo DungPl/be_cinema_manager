@@ -606,10 +606,19 @@ func ExpireSeats() {
 	db := database.DB
 	now := time.Now()
 
-	var expiredSeats []model.ShowtimeSeat
+	type ExpiredSeatLite struct {
+		ID         uint
+		ShowtimeId uint
+	}
+
+	var expiredSeats []ExpiredSeatLite
+
 	if err := db.
+		Model(&model.ShowtimeSeat{}).
+		Select("id, showtime_id").
 		Where("status = ? AND expired_at < ?", SeatHeld, now).
-		Find(&expiredSeats).Error; err != nil {
+		Limit(500). // cực kỳ quan trọng
+		Scan(&expiredSeats).Error; err != nil {
 		return
 	}
 
